@@ -533,6 +533,90 @@
       "depends_on": ["M1-01", "M1-02", "M1-03", "M1-04", "M1-05", "M1-06", "M1-07", "M1-08", "M1-09", "M1-10", "M1-11", "M1-12", "M1-13", "M1-14", "M1-15", "M1-16", "M1-17b", "M1-18c"],
       "completed": false,
       "priority": 23
+    },
+    {
+      "id": "M3-01",
+      "epic": "M3",
+      "title": "ralph_init_discovery_wizard",
+      "owner": "ralph",
+      "complexity": 2,
+      "description": "Implement the 'ralph init' CLI command and DiscoveryWizard class. DiscoveryWizard asks 6 interactive questions (product description, language/runtime/package-manager, test framework + coverage tool, quality gate commands, human-only steps, out-of-scope items) and produces a ProjectSpec dataclass. 'ralph init' uses ProjectSpec to write: prd.json scaffold (with epic_addenda and quality_checks populated), CODER_INSTRUCTIONS.md, REVIEWER_INSTRUCTIONS.md, and a git hook blocking direct commits to main. No AI calls — pure interactive I/O. See DESIGN.md: DiscoveryWizard.",
+      "acceptance_criteria": [
+        "DiscoveryWizard(io: IO) class with a run() -> ProjectSpec method that asks exactly 6 questions in order",
+        "ProjectSpec dataclass with fields: description, language, runtime, package_manager, test_framework, coverage_tool, quality_checks (list[str]), human_steps (list[str]), out_of_scope (list[str])",
+        "'ralph init' click command invokes DiscoveryWizard, writes prd.json scaffold with epic_addenda and quality_checks from ProjectSpec, writes CODER_INSTRUCTIONS.md and REVIEWER_INSTRUCTIONS.md to the repo root",
+        "Git hook written to .git/hooks/pre-push that blocks direct pushes to main with a clear error message",
+        "prd.json scaffold includes: project name (from description), quality_checks from ProjectSpec answers, empty tasks list, epic_addenda stub",
+        "Human-only steps from question 5 become owner: 'human' placeholder tasks in the generated prd.json",
+        "Tests use monkeypatch/mock for stdin; verify ProjectSpec fields match answers; verify prd.json and instruction files are created; verify git hook file exists and is executable"
+      ],
+      "files": ["ralph.py", "tests/test_discovery_wizard.py"],
+      "depends_on": ["M1-19"],
+      "completed": false,
+      "priority": 24
+    },
+    {
+      "id": "M3-02",
+      "epic": "M3",
+      "title": "prd_validator",
+      "owner": "ralph",
+      "complexity": 1,
+      "description": "Implement PrdValidator: shared validation layer used by both PrdGenerator (M3-03) and PlanChecker. Enforces 4 rules: description >= 100 chars; at least one AC references a file path (contains '.py', 'tests/', or a filename pattern); no credential strings in ralph-owned task descriptions (regex: password|secret|token|api.?key, case-insensitive); all depends_on IDs exist in the tasks list. Raises PlanInvalidError with field name and reason on any failure. See DESIGN.md: PrdValidator.",
+      "acceptance_criteria": [
+        "PrdValidator class with validate(task: dict, all_task_ids: set[str]) -> None method",
+        "Rule 1: raises PlanInvalidError if task description is shorter than 100 characters",
+        "Rule 2: raises PlanInvalidError if no acceptance criterion contains a file path pattern (r'[\\w/]+\\.py|tests/')",
+        "Rule 3: raises PlanInvalidError if description matches r'(?i)(password|secret|api.?key|token)' for ralph-owned tasks",
+        "Rule 4: raises PlanInvalidError if any depends_on ID is not in all_task_ids",
+        "PlanChecker.check_structural() calls PrdValidator.validate() for each incomplete task instead of duplicating the logic",
+        "Tests: each rule has a dedicated test — short description fails R1, description without file ref fails R2, description with 'secret' fails R3, unknown depends_on ID fails R4, valid task passes all rules"
+      ],
+      "files": ["ralph.py", "tests/test_prd_validator.py"],
+      "depends_on": ["M1-01", "M1-05"],
+      "completed": false,
+      "priority": 25
+    },
+    {
+      "id": "M3-03",
+      "epic": "M3",
+      "title": "prd_generator_ralph_add",
+      "owner": "ralph",
+      "complexity": 2,
+      "description": "Implement PrdGenerator class and 'ralph add' CLI command. PrdGenerator accepts a natural language spec string or a GitHub issue URL. If a URL matching r'github\\.com/.+/issues/\\d+' is detected, fetches the issue body via 'gh issue view <number> --json title,body'. Calls AIRunner.run_reviewer() with PromptBuilder.prd_generate_prompt() to produce a JSON list of task dicts, validates each via PrdValidator, then appends to prd.json via TaskTracker.add_task(). Infers next epic prefix from highest existing task ID. See DESIGN.md: PrdGenerator.",
+      "acceptance_criteria": [
+        "PrdGenerator(ai_runner: AIRunner, task_tracker: TaskTracker, validator: PrdValidator, runner: SubprocessRunner, logger: RalphLogger) constructor",
+        "generate(spec: str) -> list[dict]: detects GitHub issue URL, fetches body via gh CLI if URL, calls AIRunner with prd_generate_prompt, parses JSON response, validates each task via PrdValidator, appends to prd.json via TaskTracker.add_task()",
+        "PromptBuilder.prd_generate_prompt(spec: str, existing_tasks: list[dict]) -> str: includes existing task IDs and max epic prefix so AI generates correct IDs and depends_on chains",
+        "'ralph add' click command accepts a positional spec argument (string or URL), instantiates PrdGenerator, calls generate(), prints count of tasks added",
+        "Epic prefix inference: scans existing task IDs for highest Mx prefix, increments x for new tasks (e.g. if max is M1, new tasks get M2 prefix)",
+        "Tests mock AIRunner and SubprocessRunner; verify GitHub URL detection; verify PrdValidator called for each generated task; verify TaskTracker.add_task called N times"
+      ],
+      "files": ["ralph.py", "tests/test_prd_generator.py"],
+      "depends_on": ["M1-10", "M3-02"],
+      "completed": false,
+      "priority": 26
+    },
+    {
+      "id": "M3-04",
+      "epic": "M3",
+      "title": "plan_consensus_ralph_plan",
+      "owner": "ralph",
+      "complexity": 2,
+      "description": "Implement PlanConsensus class and 'ralph plan' CLI command. PlanConsensus runs a Planner + Critic loop (max 3 iterations): Planner agent produces a work plan from a ProjectSpec or free-text brief; Critic agent reviews against quality gates (measurable ACs, atomic tasks, no vague language like 'improve' or 'enhance'); on REJECT the Critic feedback is sent back to the Planner; on OKAY or after 3 iterations the plan is written to ralph-plan.md and returned. See DESIGN.md: PlanConsensus.",
+      "acceptance_criteria": [
+        "PlanConsensus(ai_runner: AIRunner, logger: RalphLogger, config: Config) constructor",
+        "run(brief: str, max_iterations: int = 3) -> str: Planner produces plan, Critic reviews, loops on REJECT up to max_iterations, returns final plan text",
+        "PromptBuilder.planner_prompt(brief: str, feedback: str = '') -> str: includes brief and any prior Critic feedback",
+        "PromptBuilder.critic_prompt(plan: str) -> str: instructs Critic to output OKAY or REJECT with specific line-level reasons; checks for vague verbs (improve, enhance, refactor, fix) without measurable outcomes",
+        "Critic verdict parsing: REJECT takes precedence if both strings appear; unclear verdict treated as OKAY with warning logged",
+        "After loop: writes plan to ralph-plan.md in repo root; logs iteration count and final verdict",
+        "'ralph plan' click command accepts optional --brief TEXT argument (or reads from stdin if omitted), calls PlanConsensus.run(), prints path to ralph-plan.md",
+        "Tests mock AIRunner; verify REJECT loops correctly; verify OKAY exits early; verify ralph-plan.md written; verify max_iterations respected"
+      ],
+      "files": ["ralph.py", "tests/test_plan_consensus.py"],
+      "depends_on": ["M1-10", "M3-02"],
+      "completed": false,
+      "priority": 27
     }
   ]
 }

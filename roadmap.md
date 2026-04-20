@@ -76,11 +76,15 @@ Deliver the full architecture from the rewrite plan as a single working Python f
 
 ### Deliverables
 
-- [ ] `ralph init` command — interactive setup that produces:
+- [ ] `ralph init` command — interactive setup via `DiscoveryWizard` (6-question grill-me lite) that produces:
   - `prd.json` scaffold (with `epic_addenda`, `quality_checks`, empty task list)
   - `CODER_INSTRUCTIONS.md` customised to the project's stack
   - `REVIEWER_INSTRUCTIONS.md`
   - Git hook that blocks commits directly to main
+- [ ] `DiscoveryWizard` — 6-question interactive I/O class; no AI; produces `ProjectSpec` dataclass
+- [ ] `PrdValidator` — 4-rule validation (description length, file-path AC, no credentials, valid depends_on); shared by `PlanChecker` and `PrdGenerator`
+- [ ] `ralph add` command — `PrdGenerator` class; converts free-text spec or GitHub issue URL → validated tasks appended to `prd.json`
+- [ ] `ralph plan` command — `PlanConsensus` class; Planner + Critic loop (max 3 iter); writes `ralph-plan.md`
 - [ ] `pipx`-installable package — `pipx install ralphzilla` → `ralph` available globally
 - [ ] README — quickstart, `prd.json` schema reference, CLI flag reference, worked example
 - [ ] Schema validation on `prd.json` load — clear error messages for malformed files
@@ -186,6 +190,7 @@ M3 (DX) is deliberately before M4 (Scrum Master) because without a clean init st
 | Plan validation | M1 (structural) + M2 (AI) |
 | Failure recovery | M1 (CI/review) + M4 (Scrum Master) |
 | Installation / `init` | M3 |
+| Spec-driven planning (Discuss/Plan phase) | M3 (`ralph plan` + `ralph add`) |
 | Documentation | M3 |
 | Tests | M2 |
 | Sprint supervision | M4 |

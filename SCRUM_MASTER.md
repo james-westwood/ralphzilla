@@ -38,6 +38,21 @@ If any of these fail, fix them before starting the loop — the loop will abort 
 
 ---
 
+## Workflow skills (Claude Code only)
+
+These Claude Code skills complement the loop. Use them **before** `bash ralph-loop.sh` starts, or between sprints. They do not survive outside a Claude session — they are interaction tools, not automation.
+
+| Skill | When to use |
+|---|---|
+| `/loop 10m <monitor command>` | Schedule a status check (e.g. `tail -5 ralph-loop.log`) to run every 10 minutes while the loop is running unattended |
+| `/ralph-planner` | Run a guided 8-question discovery interview to produce a `prd.json` from scratch — use when starting a brand-new project with no existing backlog |
+| `/ralph-prd` | Convert a feature spec or GitHub issue list into tasks and append them to `prd.json` — use when adding a new epic mid-project |
+| `/grill-me` | Stress-test a plan or design before committing it to `prd.json` — surfaces assumptions and contradictions early |
+
+These are complements, not replacements — `ralph-planner` and `ralph-prd` are superseded by `ralph init` and `ralph add` once M3 is built.
+
+---
+
 ## Starting a sprint
 
 ```bash
@@ -54,7 +69,7 @@ bash ralph-loop.sh --opencode-only --skip-review --task M1-01
 bash ralph-loop.sh --opencode-only --skip-review --resume --max 10
 ```
 
-**Key rule**: if you are running inside a Claude Code session, always use `--skip-review`. The reviewer step silently fails in nested Claude sessions (see DESIGN.md lesson #8). CI is the quality gate.
+**Key rule**: never use `--skip-review` — it removes the code review entirely and leaves CI as the only quality gate. Use `--opencode-coder-model` / `--opencode-reviewer-model` to route both agents through opencode so neither depends on a nested Claude session (see DESIGN.md lesson #8).
 
 ---
 
