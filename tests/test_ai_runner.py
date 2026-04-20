@@ -67,3 +67,60 @@ def test_clean_output():
     assert "Valid output" in cleaned
     assert "> build" not in cleaned
     assert "\u2713" not in cleaned
+
+
+def test_assign_agents_complexity_routing():
+    config = MagicMock(
+        model_mode="random",
+        claude_only=False,
+        gemini_only=False,
+        opencode_only=False,
+    )
+    ai = AIRunner(MagicMock(), MagicMock(), config)
+
+    task_1 = {"complexity": 1}
+    task_2 = {"complexity": 2}
+    task_3 = {"complexity": 3}
+    task_default = {}
+
+    coder1, rev1 = ai.assign_agents(task_1)
+    coder2, rev2 = ai.assign_agents(task_2)
+    coder3, rev3 = ai.assign_agents(task_3)
+    coder_def, rev_def = ai.assign_agents(task_default)
+
+    assert coder1 == "opencode", f"complexity 1 should use opencode/kimi, got {coder1}"
+    assert rev1 == "gemini", f"complexity 1 should use gemini for reviewer, got {rev1}"
+
+    assert coder2 == "gemini", f"complexity 2 should use gemini, got {coder2}"
+    assert rev2 == "claude", f"complexity 2 should use claude for reviewer, got {rev2}"
+
+    assert coder3 == "claude", f"complexity 3 should use claude, got {coder3}"
+    assert rev3 == "gemini", f"complexity 3 should use gemini for reviewer, got {rev3}"
+
+    assert coder_def == "opencode", f"default complexity should use opencode, got {coder_def}"
+
+
+def test_run_reviewer_claude_removes_claudecode():
+    runner = MagicMock()
+    runner.run.return_value.stdout = "Review output"
+    config = MagicMock(opencode_model="kimi")
+    ai = AIRunner(runner, MagicMock(), config)
+
+    with patch.dict(os.environ, {}, clear=True):
+        ai.run_reviewer("claude", "test prompt")
+
+    call_kwargs = runner.run.call_args[1]
+    assert call_kwargs.get("env_removals") == ["CLAUDECODE"]
+
+
+def test_run_test_writer_uses_different_model():
+    runner = MagicMock()
+    runner.run.return_value.stdout = "Tests written"
+    config = MagicMock(opencode_model="kimi")
+    logger = MagicMock()
+    ai = AIRunner(runner, logger, config)
+
+    ai.run_test_writer("test prompt", Path("."))
+
+    call_args = runner.run.call_args[0][0]
+    assert call_args[0] in ("claude", "gemini")
