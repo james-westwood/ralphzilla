@@ -13,6 +13,7 @@ Usage:
 Run with --help for full option list.
 """
 
+import ast
 import json
 import os
 import re
@@ -1224,6 +1225,135 @@ class RalphTestWriter:
 
 
 TestWriter = RalphTestWriter
+
+
+class TestQualityChecker:
+    """
+    Two-tier validation of tests written by TestWriter.
+    Tier 1: AST-based deterministic checks.
+    Tier 2: AI semantic review (only runs if Tier 1 passes).
+    """
+
+    def __init__(self, ai_runner: "AIRunner", logger: RalphLogger, config: Config):
+        self.ai_runner = ai_runner
+        self.logger = logger
+        self.config = config
+
+    def _ast_checks(self, test_source: str, task: dict) -> list[str]:
+        """Runs deterministic AST-based checks on test source."""
+        issues = []
+        try:
+            tree = ast.parse(test_source)
+        except SyntaxError as e:
+            issues.append(f"SyntaxError: {e}")
+            return issues
+
+        test_fns = [
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name.startswith("test_")
+        ]
+
+        if len(test_fns) < len(task.get("acceptance_criteria", [])):
+            issues.append(
+                f"Fewer tests ({len(test_fns)}) than ACs ({len(task['acceptance_criteria'])})"
+            )
+
+        for fn in test_fns:
+            pass_or_expr_only = all(isinstance(s, (ast.Pass, ast.Expr)) for s in fn.body)
+            if pass_or_expr_only:
+                issues.append(f"{fn.name}: empty or pass-only body")
+
+            asserts = [n for n in ast.walk(fn) if isinstance(n, ast.Assert)]
+            if not asserts:
+                issues.append(f"{fn.name}: no assertions")
+                continue
+
+            for a in asserts:
+                if isinstance(a.test, ast.Constant) and a.test.value is True:
+                    issues.append(f"{fn.name}: trivially true assertion (assert True)")
+                elif isinstance(a.test, ast.Constant) and isinstance(
+                    a.test.value, (int, float, str)
+                ):
+                    issues.append(f"{fn.name}: constant assertion (assert {a.test.value!r})")
+
+        imports = [
+            ast.unparse(n) for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))
+        ]
+        task_title = task.get("title", "")
+        module_name = (
+            task_title.split("_")[0] if "_" in task_title else task_title.split()[0].lower()
+        )
+        if not any(module_name.lower() in imp.lower() for imp in imports):
+            issues.append("Test file does not appear to import the module under test")
+
+        return issues
+
+    def check(self, task: dict, test_file_path: Path) -> TestQualityResult:
+        """Runs two-tier quality check on test file."""
+        test_source = test_file_path.read_text(encoding="utf-8")
+
+        deterministic_issues = self._ast_checks(test_source, task)
+
+        if deterministic_issues:
+            return TestQualityResult(
+                passed=False,
+                hollow_tests=[],
+                deterministic_issues=deterministic_issues,
+                ai_issues=[],
+                rounds_used=0,
+            )
+
+        ast_report = (
+            "\n".join(deterministic_issues) if not deterministic_issues else "Tier 1 passed"
+        )
+        prompt = PromptBuilder.test_quality_prompt(task, test_source, ast_report)
+        ai_output = self.ai_runner.run_reviewer("claude", prompt)
+
+        ai_issues = []
+        hollow_tests = []
+        for line in ai_output.splitlines():
+            match = re.match(r"\[HOLLOW\]\s+(\w+):\s+(.+)", line)
+            if match:
+                test_name, reason = match.groups()
+                hollow_tests.append(test_name)
+                ai_issues.append(f"{test_name}: {reason}")
+
+        passed = len(hollow_tests) == 0
+        return TestQualityResult(
+            passed=passed,
+            hollow_tests=hollow_tests,
+            deterministic_issues=deterministic_issues,
+            ai_issues=ai_issues,
+            rounds_used=0,
+        )
+
+    def run(
+        self, task: dict, test_file_path: Path, test_writer: TestWriter, rounds: int = 0
+    ) -> TestQualityResult:
+        """Retries test_writer up to max_test_write_rounds if quality fails."""
+        max_rounds = self.config.max_test_write_rounds
+
+        while rounds < max_rounds:
+            result = self.check(task, test_file_path)
+
+            if result.passed:
+                return result
+
+            rounds += 1
+            self.logger.warn(f"Test quality check failed (round {rounds}/{max_rounds})")
+
+            if rounds < max_rounds:
+                self.logger.info(f"Retrying test writer (round {rounds + 1})...")
+                test_writer.write_tests(task, self.config.repo_dir)
+
+        return TestQualityResult(
+            passed=False,
+            hollow_tests=result.hollow_tests,
+            deterministic_issues=result.deterministic_issues,
+            ai_issues=result.ai_issues,
+            rounds_used=rounds,
+        )
 
 
 def main() -> int:
