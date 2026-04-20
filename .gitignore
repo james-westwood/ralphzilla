@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Tools
+.ruff_cache/
+.mypy_cache/
+
+# Ralph runtime
+ralph.log
+progress.txt
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo

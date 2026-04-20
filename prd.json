@@ -1,0 +1,11 @@
+{
+  "project": "ralphzilla",
+  "description": "AI sprint runner — executes prd.json backlogs via AI agents with autonomous failure recovery",
+  "quality_checks": [
+    "uv run pytest tests/ -v",
+    "uv run ruff check ralph.py tests/",
+    "uv run ruff format --check ralph.py tests/"
+  ],
+  "epic_addenda": {},
+  "tasks": []
+}
