@@ -69,7 +69,7 @@ bash ralph-loop.sh --opencode-only --skip-review --task M1-01
 bash ralph-loop.sh --opencode-only --skip-review --resume --max 10
 ```
 
-**Key rule**: never use `--skip-review` — it removes the code review entirely and leaves CI as the only quality gate. Use `--opencode-coder-model` / `--opencode-reviewer-model` to route both agents through opencode so neither depends on a nested Claude session (see DESIGN.md lesson #8).
+**Key rule**: if you are running inside a Claude Code session, always use `--skip-review`. The reviewer step silently fails in nested Claude sessions (see DESIGN.md lesson #8). If opencode is available, prefer `--opencode-only` (routes coder and reviewer both through opencode). If opencode is also down, use `--skip-review` — CI is the quality gate of last resort.
 
 ---
 
