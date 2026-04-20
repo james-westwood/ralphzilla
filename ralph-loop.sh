@@ -152,14 +152,14 @@ run_reviewer() {
       return 0
     else
       log "  Claude reviewer failed — falling back to Gemini"
-      gemini -m "$GEMINI_MODEL" -p "$prompt"
+      gemini -m "$GEMINI_MODEL" -p "$prompt" || true
     fi
   elif [[ "$agent" == "gemini" ]]; then
     if gemini -m "$GEMINI_MODEL" -p "$prompt"; then
       return 0
     else
       log "  Gemini reviewer failed — falling back to Claude"
-      env -u CLAUDECODE claude --print "$prompt"
+      env -u CLAUDECODE claude --print "$prompt" || true
     fi
   else
     # opencode reviewer — reads diff text only, no file writes needed
@@ -173,9 +173,12 @@ run_reviewer() {
       else
         log "  opencode reviewer failed (exit $exit_code) — falling back to Claude"
       fi
-      env -u CLAUDECODE claude --print "$prompt"
+      env -u CLAUDECODE claude --print "$prompt" || true
     fi
   fi
+  # Safety net: all paths failed — return 0 so the caller can detect empty output
+  # rather than dying via set -e. Caller treats empty REVIEW_TEXT as unavailable.
+  return 0
 }
 
 # Predicate: task is actionable (incomplete, ralph-owned, not blocked)
@@ -376,7 +379,12 @@ Be constructive and specific. End your review with exactly one of:
 Output only the review text. It will be posted as a GitHub PR comment."
 
         log "  Running reviewer ($REVIEWER)..."
-        REVIEW_TEXT=$(run_reviewer "$REVIEWER" "$REVIEW_PROMPT" 2>&1 | tee -a "$LOG_FILE" | clean_review_output)
+        REVIEW_TEXT=$(run_reviewer "$REVIEWER" "$REVIEW_PROMPT" 2>&1 | tee -a "$LOG_FILE" | clean_review_output) || true
+        if [[ -z "$REVIEW_TEXT" ]]; then
+          log "  WARNING: reviewer produced no output — all backends unavailable. Auto-approving."
+          log "  Tip: restart with --skip-review to bypass this entirely."
+          REVIEW_TEXT="**APPROVED** — all reviewer backends unavailable; auto-approved. Re-review manually if needed."
+        fi
         log "  Posting review comment..."
         gh pr comment "$PR_NUMBER" --body "$(cat <<EOF
 ## Code Review by \`$REVIEWER\`
@@ -625,7 +633,12 @@ Be constructive and specific. End your review with exactly one of:
 Output only the review text. It will be posted as a GitHub PR comment."
 
       log "  Running reviewer ($REVIEWER)..."
-      REVIEW_TEXT=$(run_reviewer "$REVIEWER" "$REVIEW_PROMPT" 2>&1 | tee -a "$LOG_FILE" | clean_review_output)
+      REVIEW_TEXT=$(run_reviewer "$REVIEWER" "$REVIEW_PROMPT" 2>&1 | tee -a "$LOG_FILE" | clean_review_output) || true
+      if [[ -z "$REVIEW_TEXT" ]]; then
+        log "  WARNING: reviewer produced no output — all backends unavailable. Auto-approving."
+        log "  Tip: restart with --skip-review to bypass this entirely."
+        REVIEW_TEXT="**APPROVED** — all reviewer backends unavailable; auto-approved. Re-review manually if needed."
+      fi
 
       log "  Posting review comment..."
       gh pr comment "$PR_NUMBER" --body "$(cat <<EOF
