@@ -29,7 +29,7 @@ def test_precommit_gate_fail_then_success():
     ]
 
     ai_runner = MagicMock()
-    ai_runner.assign_agents.return_value = ("coder", "reviewer")
+    ai_runner.assign_agents.return_value = ("coder", "reviewer", "test_writer")
 
     config = MagicMock(max_precommit_rounds=2)
     gate = PreCommitGate(runner, ai_runner, MagicMock(), config)
@@ -45,7 +45,7 @@ def test_precommit_gate_max_rounds_reached():
     runner.run.return_value.returncode = 1
 
     ai_runner = MagicMock()
-    ai_runner.assign_agents.return_value = ("coder", "reviewer")
+    ai_runner.assign_agents.return_value = ("coder", "reviewer", "test_writer")
 
     config = MagicMock(max_precommit_rounds=2)
     gate = PreCommitGate(runner, ai_runner, MagicMock(), config)
