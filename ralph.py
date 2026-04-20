@@ -1569,6 +1569,164 @@ class TestQualityChecker:
         )
 
 
+class CIPoller:
+    """
+    Polls CI completion using run-ID pinning to avoid stale-data race.
+    On failure: fetches logs, invokes coder fix loop, re-polls.
+    """
+
+    def __init__(
+        self,
+        runner: SubprocessRunner,
+        ai_runner: AIRunner,
+        logger: RalphLogger,
+        config: Config,
+    ):
+        self.runner = runner
+        self.ai_runner = ai_runner
+        self.logger = logger
+        self.config = config
+
+    def _get_latest_run_id(self, branch: str) -> str:
+        """Gets the latest run ID for a branch using gh run list."""
+        result = self.runner.run(
+            [
+                "gh",
+                "run",
+                "list",
+                "--branch",
+                branch,
+                "--json",
+                "databaseId",
+                "--jq",
+                ".[0].databaseId",
+            ],
+            check=True,
+        )
+        run_id = result.stdout.strip()
+        if not run_id:
+            raise CITimeoutError(f"No run found for branch {branch}")
+        return run_id
+
+    def _wait_for_run(self, run_id: str) -> str:
+        """Polls a specific run ID until completion. Returns 'PASSED' or 'FAILED'."""
+        attempts = 0
+        while attempts < CI_POLL_MAX_ATTEMPTS:
+            result = self.runner.run(
+                [
+                    "gh",
+                    "run",
+                    "view",
+                    run_id,
+                    "--json",
+                    "status,conclusion",
+                ],
+                check=True,
+            )
+            data = json.loads(result.stdout)
+            status = data.get("status", "")
+            conclusion = data.get("conclusion")
+
+            if status in CI_PENDING_STATES:
+                self.logger.info(f"Run {run_id} status: {status} (attempt {attempts + 1})")
+                time.sleep(CI_POLL_INTERVAL_SECS)
+                attempts += 1
+                continue
+
+            if conclusion in CI_FAILURE_STATES:
+                return "FAILED"
+
+            if conclusion == "success":
+                return "PASSED"
+
+            return conclusion or "UNKNOWN"
+
+        raise CITimeoutError(
+            f"CI run {run_id} did not complete after "
+            f"{CI_POLL_MAX_ATTEMPTS * CI_POLL_INTERVAL_SECS // 60} minutes"
+        )
+
+    def _wait_for_new_run(self, branch: str, prev_run_id: str, timeout: int = 180) -> str:
+        """Polls until a new run ID appears. Returns new run ID or raises CITimeoutError."""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            try:
+                new_run_id = self._get_latest_run_id(branch)
+                if new_run_id != prev_run_id:
+                    self.logger.info(f"New run detected: {new_run_id}")
+                    return new_run_id
+            except Exception:
+                pass
+
+            self.logger.info(f"Waiting for new run (current: {prev_run_id})...")
+            time.sleep(10)
+
+        raise CITimeoutError(f"No new run appeared for branch {branch} after {timeout}s")
+
+    def wait_for_completion(self, pr_number: int, branch: str) -> CIResult:
+        """Waits for CI to complete using run-ID pinning. Returns CIResult."""
+        self.logger.info(f"Waiting for CI on PR #{pr_number} (branch: {branch})")
+
+        run_id = self._get_latest_run_id(branch)
+        self.logger.info(f"Found run ID: {run_id}")
+
+        conclusion = self._wait_for_run(run_id)
+
+        if conclusion == "PASSED":
+            self.logger.info("CI passed")
+            return CIResult(passed=True, rounds_used=1)
+
+        self.logger.error(f"CI failed with conclusion: {conclusion}")
+        return CIResult(passed=False, rounds_used=1)
+
+    def wait_and_fix(self, task: dict, pr_number: int, branch: str, prd: dict) -> CIResult:
+        """Waits for CI, on failure invokes coder fix loop, re-polls."""
+        rounds_used = 0
+
+        while rounds_used < self.config.max_ci_fix_rounds:
+            result = self.wait_for_completion(pr_number, branch)
+
+            if result.passed:
+                return CIResult(passed=True, rounds_used=rounds_used)
+
+            rounds_used += 1
+            self.logger.warn(f"CI failed (round {rounds_used}/{self.config.max_ci_fix_rounds})")
+
+            if rounds_used >= self.config.max_ci_fix_rounds:
+                break
+
+            self.logger.info("Fetching CI logs and invoking coder fix loop...")
+
+            log_result = self.runner.run(
+                ["gh", "run", "view", "--log-failed"],
+                check=False,
+            )
+            failure_log = log_result.stdout.splitlines()[-150:]
+            failure_log_text = "\n".join(failure_log)
+
+            prompt = PromptBuilder.ci_fix_prompt(task, failure_log_text)
+            coder, _, _ = self.ai_runner.assign_agents(task)
+            success = self.ai_runner.run_coder(coder, prompt, self.config.repo_dir)
+
+            if not success:
+                self.logger.error("Coder fix loop failed")
+                raise CIFailedFatal(f"Coder failed on round {rounds_used}")
+
+            self.logger.info("Pushing fix and waiting for new run...")
+
+            branch_manager = BranchManager(self.config.repo_dir, self.runner, self.logger)
+            branch_manager.push_branch(branch)
+
+            new_run_id = self._wait_for_new_run(branch, "", timeout=180)
+            conclusion = self._wait_for_run(new_run_id)
+
+            if conclusion == "PASSED":
+                return CIResult(passed=True, rounds_used=rounds_used)
+
+        self.logger.error(f"CI still failing after {rounds_used} fix rounds")
+        raise CIFailedFatal(f"CI still failing after {rounds_used} fix rounds")
+
+
 def main() -> int:
     print("ralph.py — skeleton implemented. See roadmap.md.")
     return 0
