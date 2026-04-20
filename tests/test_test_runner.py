@@ -51,7 +51,7 @@ def test_test_runner_fail_then_success():
     ]
 
     ai_runner = MagicMock()
-    ai_runner.assign_agents.return_value = ("coder", "reviewer")
+    ai_runner.assign_agents.return_value = ("coder", "reviewer", "test_writer")
 
     task_tracker = MagicMock()
     task_tracker.get_quality_checks.return_value = ["pytest tests/ -v"]
@@ -72,7 +72,7 @@ def test_test_runner_max_rounds_reached():
     runner.run.return_value.returncode = 1
 
     ai_runner = MagicMock()
-    ai_runner.assign_agents.return_value = ("coder", "reviewer")
+    ai_runner.assign_agents.return_value = ("coder", "reviewer", "test_writer")
 
     task_tracker = MagicMock()
     task_tracker.get_quality_checks.return_value = ["pytest tests/ -v"]
@@ -93,7 +93,7 @@ def test_test_runner_fix_loop_fires_on_failure():
     runner.run.return_value.returncode = 1
 
     ai_runner = MagicMock()
-    ai_runner.assign_agents.return_value = ("claude", "reviewer")
+    ai_runner.assign_agents.return_value = ("claude", "reviewer", "test_writer")
 
     task_tracker = MagicMock()
     task_tracker.get_quality_checks.return_value = ["ruff check ."]

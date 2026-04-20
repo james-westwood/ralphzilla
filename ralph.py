@@ -919,31 +919,31 @@ class AIRunner:
         """True when ralph is running inside a Claude Code session."""
         return "CLAUDECODE" in os.environ
 
-    def assign_agents(self, task: dict) -> tuple[str, str]:
-        """Returns (coder, reviewer) based on complexity and config."""
+    def assign_agents(self, task: dict) -> tuple[str, str, str]:
+        """Returns (coder, reviewer, test_writer) based on complexity and config."""
         if self.config.claude_only:
-            return "claude", "claude"
+            return "claude", "claude", "gemini"
         if self.config.gemini_only:
-            return "gemini", "gemini"
+            return "gemini", "claude", "opencode"
         if self.config.opencode_only:
-            return "opencode", "opencode"
+            return "opencode", "claude", "gemini"
 
         complexity = task.get("complexity") or 1
         # Complexity mapping from DESIGN.md
         if self.config.model_mode == "claude":
-            return "claude", "claude"
+            return "claude", "gemini", "opencode"
         if self.config.model_mode == "gemini":
-            return "gemini", "gemini"
+            return "gemini", "opencode", "claude"
         if self.config.model_mode == "opencode":
-            return "opencode", "opencode"
+            return "opencode", "gemini", "claude"
 
         # Default random-ish assignment based on complexity
         if complexity == 1:
-            return "opencode", "gemini"
+            return "opencode", "gemini", "claude"
         elif complexity == 2:
-            return "gemini", "claude"
+            return "gemini", "claude", "opencode"
         else:
-            return "claude", "gemini"
+            return "claude", "gemini", "opencode"
 
     def _clean_output(self, text: str) -> str:
         """Strips ANSI escape codes and opencode internal UI lines."""
@@ -1036,9 +1036,10 @@ class AIRunner:
             self.logger.error(f"Reviewer {agent} failed.")
             return ""
 
-    def run_test_writer(self, prompt: str, cwd: Path) -> bool:
+    def run_test_writer(self, prompt: str, cwd: Path, agent: str | None = None) -> bool:
         """Test writer always uses a different model from coder."""
-        agent = "gemini" if self._is_nested_claude_session() else "claude"
+        if agent is None:
+            agent = "gemini" if self._is_nested_claude_session() else "claude"
         return self.run_coder(agent, prompt, cwd)
 
     def run_decompose(self, task: dict) -> list[dict]:
@@ -1095,7 +1096,7 @@ class PreCommitGate:
 
             if rounds_used < self.config.max_precommit_rounds:
                 prompt = PromptBuilder.precommit_fix_prompt(task, result.stdout)
-                coder, _ = self.ai_runner.assign_agents(task)
+                coder, _, _ = self.ai_runner.assign_agents(task)
                 self.ai_runner.run_coder(coder, prompt, branch_dir)
             else:
                 self.logger.error("Pre-commit still failing after max rounds.")
@@ -1152,12 +1153,77 @@ class TestRunner:
 
             if rounds_used < self.config.max_test_fix_rounds:
                 prompt = PromptBuilder.test_fix_prompt(task, failure_output)
-                coder, _ = self.ai_runner.assign_agents(task)
+                coder, _, _ = self.ai_runner.assign_agents(task)
                 self.ai_runner.run_coder(coder, prompt, self.config.repo_dir)
             else:
                 self.logger.error("Quality checks still failing after max rounds.")
 
         return TestResult(passed=False, rounds_used=rounds_used)
+
+
+class RalphTestWriter:
+    """
+    TDD mode component that invokes a separate AI agent to write failing tests
+    before the coder starts. The test writer must be a different model from
+    the eventual coder.
+    """
+
+    def __init__(
+        self,
+        ai_runner: "AIRunner",
+        runner: SubprocessRunner,
+        logger: RalphLogger,
+    ):
+        self.ai_runner = ai_runner
+        self.runner = runner
+        self.logger = logger
+
+    def write_tests(self, task: dict, branch_dir: Path) -> Path:
+        """
+        Invokes test-writer agent, commits failing tests to branch.
+        Returns Path to the committed test file.
+        """
+        _, _, test_writer = self.ai_runner.assign_agents(task)
+        prompt = PromptBuilder.test_writer_prompt(task)
+        self.ai_runner.run_test_writer(prompt, branch_dir, agent=test_writer)
+
+        test_file_path = self._discover_test_file(task, branch_dir)
+
+        self.runner.run(
+            ["git", "add", str(test_file_path)],
+            cwd=branch_dir,
+            check=True,
+        )
+        commit_msg = f"[{task['id']}] {task['title']}: add failing tests"
+        self.runner.run(
+            ["git", "commit", "-m", commit_msg],
+            cwd=branch_dir,
+            check=True,
+        )
+
+        return test_file_path
+
+    def _discover_test_file(self, task: dict, branch_dir: Path) -> Path:
+        """Looks in tests/ directory for files matching test_{task_title}*.py."""
+        task_title = task.get("title", "")
+        sanitised = re.sub(r"[^a-zA-Z0-9]", "_", task_title.lower())
+        pattern = f"test_{sanitised}*.py"
+
+        tests_dir = branch_dir / "tests"
+        if not tests_dir.exists():
+            raise RalphError(f"tests/ directory not found in {branch_dir}")
+
+        matching = list(tests_dir.glob(pattern))
+        if not matching:
+            raise RalphError(f"No test file found matching pattern '{pattern}' in tests/ directory")
+
+        if len(matching) > 1:
+            self.logger.warn(f"Multiple test files match '{pattern}', using first: {matching[0]}")
+
+        return matching[0]
+
+
+TestWriter = RalphTestWriter
 
 
 def main() -> int:

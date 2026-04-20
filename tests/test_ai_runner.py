@@ -21,11 +21,21 @@ def test_is_nested_claude_session():
 def test_assign_agents_overrides():
     config = MagicMock(claude_only=True, gemini_only=False, opencode_only=False)
     ai = AIRunner(MagicMock(), MagicMock(), config)
-    assert ai.assign_agents({}) == ("claude", "claude")
+    coder, rev, tw = ai.assign_agents({})
+    assert (coder, rev) == ("claude", "claude")
+    assert tw == "gemini"
 
     config.claude_only = False
     config.gemini_only = True
-    assert ai.assign_agents({}) == ("gemini", "gemini")
+    coder, rev, tw = ai.assign_agents({})
+    assert (coder, rev) == ("gemini", "claude")
+    assert tw == "opencode"
+
+    config.gemini_only = False
+    config.opencode_only = True
+    coder, rev, tw = ai.assign_agents({})
+    assert (coder, rev) == ("opencode", "claude")
+    assert tw == "gemini"
 
 
 def test_run_coder_claude():
@@ -83,21 +93,25 @@ def test_assign_agents_complexity_routing():
     task_3 = {"complexity": 3}
     task_default = {}
 
-    coder1, rev1 = ai.assign_agents(task_1)
-    coder2, rev2 = ai.assign_agents(task_2)
-    coder3, rev3 = ai.assign_agents(task_3)
-    coder_def, rev_def = ai.assign_agents(task_default)
+    coder1, rev1, tw1 = ai.assign_agents(task_1)
+    coder2, rev2, tw2 = ai.assign_agents(task_2)
+    coder3, rev3, tw3 = ai.assign_agents(task_3)
+    coder_def, rev_def, tw_def = ai.assign_agents(task_default)
 
     assert coder1 == "opencode", f"complexity 1 should use opencode/kimi, got {coder1}"
     assert rev1 == "gemini", f"complexity 1 should use gemini for reviewer, got {rev1}"
+    assert tw1 != coder1, "test_writer must be different from coder"
 
     assert coder2 == "gemini", f"complexity 2 should use gemini, got {coder2}"
     assert rev2 == "claude", f"complexity 2 should use claude for reviewer, got {rev2}"
+    assert tw2 != coder2, "test_writer must be different from coder"
 
     assert coder3 == "claude", f"complexity 3 should use claude, got {coder3}"
     assert rev3 == "gemini", f"complexity 3 should use gemini for reviewer, got {rev3}"
+    assert tw3 != coder3, "test_writer must be different from coder"
 
     assert coder_def == "opencode", f"default complexity should use opencode, got {coder_def}"
+    assert tw_def != coder_def, "test_writer must be different from coder"
 
 
 def test_run_reviewer_claude_removes_claudecode():
