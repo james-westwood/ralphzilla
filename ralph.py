@@ -207,6 +207,177 @@ class ReviewQualityResult:
     reason: str  # why it failed quality check (if it did)
 
 
+class ReviewQualityChecker:
+    """
+    Two-tier validation of reviews before the ReviewLoop acts on them.
+    Tier 1: Deterministic checks (review length, verdict pattern, file refs, uniqueness).
+    Tier 2: AI meta-review (runs only if Tier 1 passes and enabled).
+    """
+
+    def __init__(self, ai_runner: "AIRunner", logger: "RalphLogger", config: Config):
+        self.ai_runner = ai_runner
+        self.logger = logger
+        self.config = config
+
+    def check(self, review_text: str, previous_reviews: list[str]) -> ReviewQualityResult:
+        """
+        Runs Tier 1 deterministic checks.
+        Returns ReviewQualityResult(acceptable: bool, reason: str).
+        """
+        word_count = len(review_text.split())
+        if word_count < 10:
+            return ReviewQualityResult(False, f"review too short ({word_count} words)")
+
+        verdict_pattern = r"APPROVED|CHANGES\s+REQUESTED"
+        if not re.search(verdict_pattern, review_text, re.IGNORECASE):
+            return ReviewQualityResult(False, "no verdict found")
+
+        if not re.search(r"\w+\.\w+:\d+|\w+/\w+\.\w+", review_text):
+            return ReviewQualityResult(False, "no file/line references found")
+
+        if previous_reviews and review_text.strip() == previous_reviews[-1].strip():
+            return ReviewQualityResult(False, "identical to previous review (rubber-stamping)")
+
+        return ReviewQualityResult(True, "ok")
+
+    def check_with_retry(
+        self,
+        review_text: str,
+        task: dict,
+        prd: dict,
+        previous_reviews: list[str],
+        round_num: int,
+    ) -> tuple[ReviewQualityResult, str]:
+        """
+        Runs quality check, retries with different reviewer on failure.
+        Returns (result, retry_agent).
+        """
+        result = self.check(review_text, previous_reviews)
+
+        if result.acceptable:
+            return result, ""
+
+        self.logger.warn(f"Review quality check failed: {result.reason}")
+        available_agents = ["gemini", "opencode", "claude"]
+        retry_agent = available_agents[(round_num + 1) % len(available_agents)]
+        return result, retry_agent
+
+
+class ReviewLoop:
+    """
+    Drives the reviewer agent, parses verdict, invokes coder fix loop on CHANGES REQUESTED.
+    Passes every review through ReviewQualityChecker before acting on it.
+    """
+
+    def __init__(
+        self,
+        pr_manager: "PRManager",
+        ai_runner: "AIRunner",
+        logger: "RalphLogger",
+        config: Config,
+    ):
+        self.pr_manager = pr_manager
+        self.ai_runner = ai_runner
+        self.logger = logger
+        self.config = config
+        self.quality_checker = ReviewQualityChecker(ai_runner, logger, config)
+
+    def _parse_verdict(self, review_text: str) -> str:
+        """
+        Parses verdict from review text.
+        CHANGES REQUESTED takes precedence if both strings appear.
+        If unclear, treats as APPROVED and logs warning.
+        """
+        if re.search(r"CHANGES\s+REQUESTED", review_text, re.IGNORECASE):
+            return "CHANGES_REQUESTED"
+
+        if re.search(r"APPROVED", review_text, re.IGNORECASE):
+            return "APPROVED"
+
+        self.logger.warn("Unclear verdict in review — treating as APPROVED")
+        return "APPROVED"
+
+    def run(self, task: dict, pr_number: int, prd: dict, coder: str, reviewer: str) -> ReviewResult:
+        """
+        Main review loop.
+        Gets PR diff, sends to reviewer, quality-checks, handles verdict.
+        On CHANGES_REQUESTED: invokes coder fix loop, pushes, re-reviews.
+        Returns ReviewResult(verdict, rounds_used).
+        """
+        diff = self.pr_manager.get_diff(pr_number)
+        if not diff.strip():
+            self.logger.warn("PR diff is empty — skipping review")
+            return ReviewResult(verdict="APPROVED", rounds_used=0)
+
+        rounds_used = 0
+        current_reviewer = reviewer
+        previous_reviews: list[str] = []
+
+        while rounds_used < self.config.max_review_rounds:
+            rounds_used += 1
+            self.logger.info(
+                f"Review round {rounds_used}/"
+                f"{self.config.max_review_rounds} with {current_reviewer}"
+            )
+
+            prompt = PromptBuilder.reviewer_prompt(task, diff, prd, rounds_used)
+            review_text = self.ai_runner.run_reviewer(current_reviewer, prompt)
+
+            if not review_text:
+                self.logger.error(f"Reviewer {current_reviewer} returned no output")
+                previous_reviews.append("")
+                current_reviewer = (
+                    "gemini"
+                    if current_reviewer == "claude"
+                    else "opencode"
+                    if current_reviewer == "gemini"
+                    else "claude"
+                )
+                continue
+
+            previous_reviews.append(review_text)
+
+            quality_result, retry_agent = self.quality_checker.check_with_retry(
+                review_text, task, prd, previous_reviews, rounds_used
+            )
+
+            if not quality_result.acceptable:
+                self.logger.warn(
+                    f"Review quality failed: {quality_result.reason} — retrying with {retry_agent}"
+                )
+                current_reviewer = retry_agent
+                continue
+
+            verdict = self._parse_verdict(review_text)
+
+            if verdict == "CHANGES_REQUESTED":
+                self.logger.info("Verdict: CHANGES_REQUESTED — invoking coder fix loop")
+
+                fix_prompt = PromptBuilder.review_fix_prompt(task, review_text)
+                success = self.ai_runner.run_coder(coder, fix_prompt, self.config.repo_dir)
+
+                if not success:
+                    self.logger.error("Coder fix loop failed")
+                    return ReviewResult(verdict="CHANGES_REQUESTED", rounds_used=rounds_used)
+
+                branch = f"ralph/{task['id']}-{BranchManager.sanitise_branch_name(task['title'])}"
+
+                self.logger.info("Pushing fix and re-reviewing...")
+                self.pr_manager.close(pr_number, "Fixed per review feedback — re-reviewing")
+
+                new_pr = self.pr_manager.create(branch, task["title"], PromptBuilder.pr_body(task))
+                new_pr_number = new_pr.number
+
+                diff = self.pr_manager.get_diff(new_pr_number)
+                current_reviewer = reviewer
+                continue
+
+            return ReviewResult(verdict=verdict, rounds_used=rounds_used)
+
+        self.logger.warn(f"Max review rounds ({self.config.max_review_rounds}) reached")
+        return ReviewResult(verdict="CHANGES_REQUESTED_MAX_REACHED", rounds_used=rounds_used)
+
+
 class RalphLogger:
     """
     Dual-stream logger that writes to stdout and a log file simultaneously.
