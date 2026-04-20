@@ -155,8 +155,12 @@ class TestReviewQualityChecker:
         review = """CHANGES REQUESTED
 src/main.py:42 - this is a bug in the authentication logic that allows bypassing the check.
 src/utils.py:10 - unused import should be removed to avoid confusion.
-The code has serious security issues and needs fixing before merging.
-Please fix these issues and resubmit for review."""
+
+The code has serious security issues and needs fixing before merging. This implementation
+does not properly handle edge cases around the authentication flow and could allow
+unauthorized access in certain scenarios. Please fix these issues and resubmit for
+review. The overall structure is good but these specific issues need attention to ensure
+proper security and functionality in production environments."""
 
         result = checker.check(review, [])
 
@@ -168,7 +172,7 @@ Please fix these issues and resubmit for review."""
         ai_runner = MockAIRunner([])
         checker = ReviewQualityChecker(ai_runner, logger, config)
 
-        review = "Approve, looks good"
+        review = "Approve"
 
         result = checker.check(review, [])
 
@@ -181,8 +185,14 @@ Please fix these issues and resubmit for review."""
         checker = ReviewQualityChecker(ai_runner, logger, config)
 
         review = (
-            "The code looks well structured and follows all the best practices in the industry. "
-            "Good implementation with proper logic patterns and error handling mechanisms."
+            "The code looks well structured and follows all the best practices in the "
+            "industry with proper patterns and comprehensive error handling coverage for all "
+            "scenarios in production environments and production use cases everywhere. "
+            "Good implementation with proper logic patterns and error handling mechanisms in "
+            "this review section showing quality design and comprehensive coverage. "
+            "The code follows best practices and handles requirements correctly with proper "
+            "validation and comprehensive error handling throughout this implementation. "
+            "Overall this is a very solid piece of work with proper patterns throughout."
         )
 
         result = checker.check(review, [])
@@ -195,10 +205,10 @@ Please fix these issues and resubmit for review."""
         ai_runner = MockAIRunner([])
         checker = ReviewQualityChecker(ai_runner, logger, config)
 
-        review = (
-            "APPROVED. This looks great overall with proper implementation patterns. "
-            "The code follows best practices and handles requirements correctly."
-        )
+        words = ["proper"] * 80 + [
+            "APPROVED. This code follows best practices.",
+        ]
+        review = " ".join(words)
 
         result = checker.check(review, [])
 
@@ -210,10 +220,18 @@ Please fix these issues and resubmit for review."""
         ai_runner = MockAIRunner([])
         checker = ReviewQualityChecker(ai_runner, logger, config)
 
-        review = "CHANGES REQUESTED - fix this critical bug in the code. src/utils.py:5"
-        previous = ["CHANGES REQUESTED - fix this critical bug in the code. src/utils.py:5"]
+        txt = (
+            "CHANGES REQUESTED - fix this critical bug in the code in src/utils.py:5 "
+            "location that affects authentication in production. This is needed for proper "
+            "authentication handling and security with comprehensive validation and "
+            "error handling coverage in production environments. The implementation needs "
+            "this specific fix before merging with proper patterns for all scenarios and edge "
+            "cases properly handled and tested in production environments with comprehensive "
+            "error handling coverage for this review in all environments. "
+            "Please review and address this issue accordingly. Thank you."
+        )
 
-        result = checker.check(review, previous)
+        result = checker.check(txt, [txt])
 
         assert result.acceptable is False
         assert "identical" in result.reason

@@ -136,6 +136,7 @@ class Config:
     max_test_fix_rounds: int
     max_test_write_rounds: int  # TDD: rounds to get hollow-free tests
     force_task_id: str | None
+    deep_review_check: bool = False  # Enable AI meta-review quality check
     claude_only: bool = False
     gemini_only: bool = False
     opencode_only: bool = False
@@ -225,20 +226,42 @@ class ReviewQualityChecker:
         Returns ReviewQualityResult(acceptable: bool, reason: str).
         """
         word_count = len(review_text.split())
-        if word_count < 10:
+        if word_count < 80:
             return ReviewQualityResult(False, f"review too short ({word_count} words)")
 
         verdict_pattern = r"APPROVED|CHANGES\s+REQUESTED"
         if not re.search(verdict_pattern, review_text, re.IGNORECASE):
             return ReviewQualityResult(False, "no verdict found")
 
-        if not re.search(r"\w+\.\w+:\d+|\w+/\w+\.\w+", review_text):
+        if not re.search(r"\w+\.py:\d+|\w+/\w+\.\w+", review_text):
             return ReviewQualityResult(False, "no file/line references found")
 
         if previous_reviews and review_text.strip() == previous_reviews[-1].strip():
             return ReviewQualityResult(False, "identical to previous review (rubber-stamping)")
 
         return ReviewQualityResult(True, "ok")
+
+    def check_deep(self, review_text: str, task: dict) -> ReviewQualityResult:
+        """
+        Runs Tier 2 AI meta-review.
+        Only runs when Tier 1 passes and config.deep_review_check=True.
+        """
+        if not self.config.deep_review_check:
+            return ReviewQualityResult(True, "ok")
+
+        prompt = PromptBuilder.review_quality_prompt(task, review_text)
+        response = self.ai_runner.run_reviewer("gemini", prompt)
+
+        if re.search(r"\bPASS\b", response, re.IGNORECASE):
+            return ReviewQualityResult(True, "ok")
+
+        reason = "AI meta-review: review not substantive"
+        if re.search(r"FAIL", response, re.IGNORECASE):
+            match = re.search(r"FAIL[:\s]+(.+)", response, re.IGNORECASE)
+            if match:
+                reason = f"AI meta-review: {match.group(1).strip()[:100]}"
+
+        return ReviewQualityResult(False, reason)
 
     def check_with_retry(
         self,
@@ -1001,6 +1024,25 @@ Do not output general comments without a file and line number.
 
 Please address the requested changes.
 """
+
+    @staticmethod
+    def review_quality_prompt(task: dict, review_text: str) -> str:
+        acs = "\n".join([f"- {ac}" for ac in task.get("acceptance_criteria", [])])
+        return f"""You are reviewing a code review for quality.
+
+Task: {task.get("title")}
+Acceptance Criteria:
+{acs}
+
+Review Text:
+{review_text}
+
+Evaluate whether this review is substantive:
+1. Does the review address all the acceptance criteria?
+2. Does the review cite specific code (file:line references)?
+3. Is the verdict justified by the issues found?
+
+Output exactly PASS if the review is substantive, or FAIL with a brief reason."""
 
     @staticmethod
     def ci_fix_prompt(task: dict, failure_log: str) -> str:
