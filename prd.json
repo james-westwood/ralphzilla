@@ -1,13 +1,13 @@
 {
   "project": "ralphzilla",
-  "description": "AI sprint runner — executes prd.json backlogs via AI agents with autonomous failure recovery",
+  "description": "AI sprint runner \u2014 executes prd.json backlogs via AI agents with autonomous failure recovery",
   "quality_checks": [
     "uv run pytest tests/ -v",
     "uv run ruff check ralph.py tests/",
     "uv run ruff format --check ralph.py tests/"
   ],
   "epic_addenda": {
-    "M1": "All implementation code goes in ralph.py only — no sub-modules or new Python files. No shell=True anywhere. TaskTracker is the sole reader/writer of prd.json. All public functions must have complete type hints. Use named constants from the Constants block, never inline magic numbers. Do NOT touch prd.json or progress.txt — the orchestrator manages those."
+    "M1": "All implementation code goes in ralph.py only \u2014 no sub-modules or new Python files. No shell=True anywhere. TaskTracker is the sole reader/writer of prd.json. All public functions must have complete type hints. Use named constants from the Constants block, never inline magic numbers. Do NOT touch prd.json or progress.txt \u2014 the orchestrator manages those."
   },
   "tasks": [
     {
@@ -16,21 +16,24 @@
       "title": "scaffold_constants_exceptions_dataclasses",
       "owner": "ralph",
       "complexity": 2,
-      "description": "Establish the foundational building blocks of ralph.py: the module docstring and shebang, the full Constants block, all typed exception classes, and all dataclasses. This is the base layer every other class imports from. No logic — just declarations. See DESIGN.md sections: Constants, Exception Hierarchy, Data Classes.",
+      "description": "Establish the foundational building blocks of ralph.py: the module docstring and shebang, the full Constants block, all typed exception classes, and all dataclasses. This is the base layer every other class imports from. No logic \u2014 just declarations. See DESIGN.md sections: Constants, Exception Hierarchy, Data Classes.",
       "acceptance_criteria": [
         "ralph.py has a shebang (#!/usr/bin/env python3) and module docstring explaining the tool's purpose",
         "Constants block defines all values from DESIGN.md including DEFAULT_MAX_ITERATIONS, CI_POLL_INTERVAL_SECS, all timeout constants, MAIN_BRANCH, LOG_FILE_NAME, PRD_FILE, PROGRESS_FILE, DEFAULT_OPENCODE_MODEL, GEMINI_MODEL",
-        "Exception hierarchy: RalphError base class plus BranchSyncError, BranchExistsError, RemoteNotSSHError, CITimeoutError, CIFailedFatal, PRDGuardViolation, CoderFailedError, ReviewerFailedError, PreflightError, PlanInvalidError, AgentSandboxViolation — all subclass RalphError",
-        "Dataclasses defined: Config, PRInfo, CIResult, ReviewResult, PreCommitResult, BranchStatus, TaskResult, PlanCheckResult, TestQualityResult, ReviewQualityResult — with all fields from DESIGN.md",
+        "Exception hierarchy: RalphError base class plus BranchSyncError, BranchExistsError, RemoteNotSSHError, CITimeoutError, CIFailedFatal, PRDGuardViolation, CoderFailedError, ReviewerFailedError, PreflightError, PlanInvalidError, AgentSandboxViolation \u2014 all subclass RalphError",
+        "Dataclasses defined: Config, PRInfo, CIResult, ReviewResult, PreCommitResult, BranchStatus, TaskResult, PlanCheckResult, TestQualityResult, ReviewQualityResult \u2014 with all fields from DESIGN.md",
         "Config dataclass includes tdd_mode: bool and max_test_write_rounds: int",
         "uv sync --extra dev completes without error",
         "uv run python ralph.py exits 0",
         "Tests verify each exception is a subclass of RalphError and can be raised and caught",
         "Tests verify each dataclass can be instantiated with its required fields"
       ],
-      "files": ["ralph.py", "tests/test_scaffold.py"],
+      "files": [
+        "ralph.py",
+        "tests/test_scaffold.py"
+      ],
       "depends_on": [],
-      "completed": false,
+      "completed": true,
       "priority": 1
     },
     {
@@ -39,7 +42,7 @@
       "title": "ralph_logger",
       "owner": "ralph",
       "complexity": 1,
-      "description": "Implement RalphLogger: dual-stream logger that writes to stdout and a log file simultaneously. Fixed-width level prefix. No Python logging module — direct print + file append. See DESIGN.md: RalphLogger.",
+      "description": "Implement RalphLogger: dual-stream logger that writes to stdout and a log file simultaneously. Fixed-width level prefix. No Python logging module \u2014 direct print + file append. See DESIGN.md: RalphLogger.",
       "acceptance_criteria": [
         "RalphLogger(log_path: Path) constructor opens or creates the log file",
         "Methods: info(), warn(), error(), fatal() each accepting a message string",
@@ -48,8 +51,13 @@
         "fatal() writes the message then raises SystemExit(1)",
         "Tests use tmp_path; verify log file is created, correct format, dual-stream output, fatal() raises SystemExit"
       ],
-      "files": ["ralph.py", "tests/test_logger.py"],
-      "depends_on": ["M1-01"],
+      "files": [
+        "ralph.py",
+        "tests/test_logger.py"
+      ],
+      "depends_on": [
+        "M1-01"
+      ],
       "completed": false,
       "priority": 2
     },
@@ -69,8 +77,14 @@
         "Raises subprocess.CalledProcessError on non-zero exit when check=True",
         "Tests verify: env var is absent in child when listed in env_removals, parent os.environ is unchanged, command is logged, CalledProcessError raised on failure with check=True"
       ],
-      "files": ["ralph.py", "tests/test_subprocess_runner.py"],
-      "depends_on": ["M1-01", "M1-02"],
+      "files": [
+        "ralph.py",
+        "tests/test_subprocess_runner.py"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02"
+      ],
       "completed": false,
       "priority": 3
     },
@@ -80,7 +94,7 @@
       "title": "task_tracker",
       "owner": "ralph",
       "complexity": 2,
-      "description": "Implement TaskTracker: the sole owner of prd.json and progress.txt. No other class reads or writes these files. Every write method does a fresh json.load() — never uses cached state. See DESIGN.md: TaskTracker.",
+      "description": "Implement TaskTracker: the sole owner of prd.json and progress.txt. No other class reads or writes these files. Every write method does a fresh json.load() \u2014 never uses cached state. See DESIGN.md: TaskTracker.",
       "acceptance_criteria": [
         "TaskTracker(prd_path: Path, progress_path: Path, runner: SubprocessRunner, logger: RalphLogger) constructor",
         "load() -> dict reads and returns prd.json from disk each call",
@@ -95,8 +109,15 @@
         "mark_decomposed(task_id: str) sets decomposed=true on matching task, writes back",
         "Tests use tmp_path for prd.json and progress.txt; verify fresh-load behaviour, depends_on filtering, human task skipping, decomposed task skipping"
       ],
-      "files": ["ralph.py", "tests/test_task_tracker.py"],
-      "depends_on": ["M1-01", "M1-02", "M1-03"],
+      "files": [
+        "ralph.py",
+        "tests/test_task_tracker.py"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02",
+        "M1-03"
+      ],
       "completed": false,
       "priority": 4
     },
@@ -116,8 +137,14 @@
         "Raises PlanInvalidError with all error messages if structural errors found",
         "Tests: valid plan passes, missing required field caught, empty ACs caught, unresolved depends_on caught, complexity inference correct for boundary cases"
       ],
-      "files": ["ralph.py", "tests/test_plan_checker.py"],
-      "depends_on": ["M1-01", "M1-04"],
+      "files": [
+        "ralph.py",
+        "tests/test_plan_checker.py"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-04"
+      ],
       "completed": false,
       "priority": 5
     },
@@ -131,7 +158,7 @@
       "acceptance_criteria": [
         "BranchManager(repo_dir: Path, runner: SubprocessRunner, logger: RalphLogger) constructor",
         "verify_ssh_remote() raises RemoteNotSSHError if 'git remote get-url origin' output does not start with 'git@'",
-        "ensure_main_up_to_date() runs: git checkout main, git fetch origin main, git reset --hard origin/main — in that order; never uses pull --ff-only",
+        "ensure_main_up_to_date() runs: git checkout main, git fetch origin main, git reset --hard origin/main \u2014 in that order; never uses pull --ff-only",
         "checkout_or_create(branch: str, resume: bool) -> BranchStatus: if branch exists and resume=False raises BranchExistsError; if branch exists and resume=True checks it out; otherwise creates it from main",
         "push_branch(branch: str) calls verify_ssh_remote() before pushing",
         "delete_local(branch: str, ignore_missing: bool = False) deletes local branch; silently skips if ignore_missing=True and branch not found",
@@ -140,8 +167,15 @@
         "sanitise_branch_name(title: str) -> str replaces non-alphanumeric with hyphens, lowercases, truncates to 40 chars",
         "Tests mock SubprocessRunner and verify exact git commands issued; verify SSH check fires before push"
       ],
-      "files": ["ralph.py", "tests/test_branch_manager.py"],
-      "depends_on": ["M1-01", "M1-02", "M1-03"],
+      "files": [
+        "ralph.py",
+        "tests/test_branch_manager.py"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02",
+        "M1-03"
+      ],
       "completed": false,
       "priority": 6
     },
@@ -163,8 +197,15 @@
         "close(pr_number: int, reason: str) posts reason as PR comment then closes",
         "Tests mock SubprocessRunner; verify retry logic on empty diff; verify PR number regex parsing"
       ],
-      "files": ["ralph.py", "tests/test_pr_manager.py"],
-      "depends_on": ["M1-01", "M1-02", "M1-03"],
+      "files": [
+        "ralph.py",
+        "tests/test_pr_manager.py"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02",
+        "M1-03"
+      ],
       "completed": false,
       "priority": 7
     },
@@ -174,15 +215,22 @@
       "title": "prd_guard",
       "owner": "ralph",
       "complexity": 1,
-      "description": "Implement PRDGuard: pre-merge safety check that aborts if the coder touched prd.json. Threshold is 0 — any modification is a violation. See DESIGN.md: PRDGuard.",
+      "description": "Implement PRDGuard: pre-merge safety check that aborts if the coder touched prd.json. Threshold is 0 \u2014 any modification is a violation. See DESIGN.md: PRDGuard.",
       "acceptance_criteria": [
         "PRDGuard(pr_manager: PRManager, logger: RalphLogger) constructor",
         "check(pr_number: int) -> None: gets prd.json diff via PRManager.get_diff_for_file(); raises PRDGuardViolation if any line matches r'^\\+.*\"completed\":\\s*true' or if any '+' lines exist in the prd.json diff at all",
         "PRDGuardViolation message includes the PR number and offending diff lines",
         "Tests: clean diff passes; diff with completed:true raises PRDGuardViolation; any added line in prd.json raises PRDGuardViolation"
       ],
-      "files": ["ralph.py", "tests/test_prd_guard.py"],
-      "depends_on": ["M1-01", "M1-02", "M1-07"],
+      "files": [
+        "ralph.py",
+        "tests/test_prd_guard.py"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02",
+        "M1-07"
+      ],
       "completed": false,
       "priority": 8
     },
@@ -192,9 +240,9 @@
       "title": "prompt_builder",
       "owner": "ralph",
       "complexity": 2,
-      "description": "Implement PromptBuilder: all prompt templates as pure static methods. No logic here — stateless text assembly only. Includes epic_addenda injection, TDD prompts, and decomposition prompt. See DESIGN.md: PromptBuilder.",
+      "description": "Implement PromptBuilder: all prompt templates as pure static methods. No logic here \u2014 stateless text assembly only. Includes epic_addenda injection, TDD prompts, and decomposition prompt. See DESIGN.md: PromptBuilder.",
       "acceptance_criteria": [
-        "PromptBuilder has no __init__ and no instance state — all methods are @staticmethod",
+        "PromptBuilder has no __init__ and no instance state \u2014 all methods are @staticmethod",
         "coder_prompt(task: dict, coder: str, prd: dict, resume: bool = False) -> str: includes task description, all ACs numbered, files list, epic_addenda if task epic matches prd epic_addenda, explicit instruction not to touch prd.json/progress.txt, and resume note if resume=True",
         "precommit_fix_prompt(task: dict, precommit_output: str) -> str",
         "test_fix_prompt(task: dict, test_output: str) -> str",
@@ -208,8 +256,13 @@
         "decompose_prompt(task: dict) -> str: asks AI to break task into 2-4 atomic subtasks as JSON list",
         "Tests verify each prompt contains required keywords/sections; reviewer_prompt includes addendum when epic_addenda key matches task epic"
       ],
-      "files": ["ralph.py", "tests/test_prompt_builder.py"],
-      "depends_on": ["M1-01"],
+      "files": [
+        "ralph.py",
+        "tests/test_prompt_builder.py"
+      ],
+      "depends_on": [
+        "M1-01"
+      ],
       "completed": false,
       "priority": 9
     },
@@ -223,15 +276,23 @@
       "acceptance_criteria": [
         "AIRunner(runner: SubprocessRunner, logger: RalphLogger, config: Config) constructor",
         "_is_nested_claude_session() -> bool returns True if 'CLAUDECODE' in os.environ",
-        "assign_agents(task: dict) -> tuple[str, str]: returns (coder, reviewer) based on config.model_mode and task complexity; complexity 1 → kimi/gemini-flash, 2 → gemini-pro/claude-sonnet, 3 → claude-opus/gemini-ultra; respects --claude-only/--gemini-only/--opencode-only overrides",
+        "assign_agents(task: dict) -> tuple[str, str]: returns (coder, reviewer) based on config.model_mode and task complexity; complexity 1 \u2192 kimi/gemini-flash, 2 \u2192 gemini-pro/claude-sonnet, 3 \u2192 claude-opus/gemini-ultra; respects --claude-only/--gemini-only/--opencode-only overrides",
         "run_coder(agent: str, prompt: str, cwd: Path) -> bool: invokes the agent subprocess, returns True on success",
         "run_reviewer(agent: str, prompt: str) -> str: returns reviewer output; if agent=='claude' and _is_nested_claude_session(), logs warning and falls back to gemini",
         "run_test_writer(prompt: str, cwd: Path) -> bool: always uses a different model from the coder for the same task (enforced by assign_agents)",
         "All Claude calls pass env_removals=['CLAUDECODE'] to SubprocessRunner",
         "Tests mock SubprocessRunner; verify nested-Claude fallback triggers; verify complexity routing for each tier; verify CLAUDECODE is removed from env on Claude calls"
       ],
-      "files": ["ralph.py", "tests/test_ai_runner.py"],
-      "depends_on": ["M1-01", "M1-02", "M1-03", "M1-09"],
+      "files": [
+        "ralph.py",
+        "tests/test_ai_runner.py"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02",
+        "M1-03",
+        "M1-09"
+      ],
       "completed": false,
       "priority": 10
     },
@@ -246,15 +307,24 @@
         "PreCommitGate(runner: SubprocessRunner, ai_runner: AIRunner, logger: RalphLogger, config: Config) constructor",
         "run(task: dict, prd: dict, branch_dir: Path) -> PreCommitResult",
         "Runs 'uv run pre-commit run --all-files' via SubprocessRunner with cwd=branch_dir",
-        "Detects failure by exit code only — not by grepping output",
+        "Detects failure by exit code only \u2014 not by grepping output",
         "On failure: invokes AIRunner.run_coder() with PromptBuilder.precommit_fix_prompt(), increments round counter",
         "Retries up to config.max_precommit_rounds",
         "After max rounds still failing: logs warning, returns PreCommitResult(passed=False, rounds_used=max_rounds)",
         "On success: returns PreCommitResult(passed=True, rounds_used=N)",
         "Tests mock SubprocessRunner and AIRunner; verify retry count; verify exit-code-based detection"
       ],
-      "files": ["ralph.py", "tests/test_precommit_gate.py"],
-      "depends_on": ["M1-01", "M1-02", "M1-03", "M1-09", "M1-10"],
+      "files": [
+        "ralph.py",
+        "tests/test_precommit_gate.py"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02",
+        "M1-03",
+        "M1-09",
+        "M1-10"
+      ],
       "completed": false,
       "priority": 11
     },
@@ -275,8 +345,18 @@
         "After max rounds still failing: logs warning, returns TestResult(passed=False, rounds_used=N)",
         "Tests mock SubprocessRunner, AIRunner, TaskTracker; verify all checks run; verify fix loop fires on failure"
       ],
-      "files": ["ralph.py", "tests/test_test_runner.py"],
-      "depends_on": ["M1-01", "M1-02", "M1-03", "M1-04", "M1-09", "M1-10"],
+      "files": [
+        "ralph.py",
+        "tests/test_test_runner.py"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02",
+        "M1-03",
+        "M1-04",
+        "M1-09",
+        "M1-10"
+      ],
       "completed": false,
       "priority": 12
     },
@@ -296,8 +376,17 @@
         "The model used for test writing is always different from the model that will be used for coding the same task (enforced via AIRunner.assign_agents returning distinct test_writer model)",
         "Tests mock AIRunner and SubprocessRunner; verify commit is issued; verify path returned"
       ],
-      "files": ["ralph.py", "tests/test_test_writer.py"],
-      "depends_on": ["M1-01", "M1-02", "M1-03", "M1-09", "M1-10"],
+      "files": [
+        "ralph.py",
+        "tests/test_test_writer.py"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02",
+        "M1-03",
+        "M1-09",
+        "M1-10"
+      ],
       "completed": false,
       "priority": 13
     },
@@ -317,8 +406,17 @@
         "run(task: dict, test_file_path: Path, test_writer: TestWriter, rounds: int = 0) -> TestQualityResult: retries TestWriter up to config.max_test_write_rounds if quality fails",
         "Tests: file with assert True fails T1; file with no assertions fails T1; valid test file passes T1; T2 only called when T1 passes"
       ],
-      "files": ["ralph.py", "tests/test_test_quality_checker.py"],
-      "depends_on": ["M1-01", "M1-02", "M1-09", "M1-10", "M1-13"],
+      "files": [
+        "ralph.py",
+        "tests/test_test_quality_checker.py"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02",
+        "M1-09",
+        "M1-10",
+        "M1-13"
+      ],
       "completed": false,
       "priority": 14
     },
@@ -341,8 +439,17 @@
         "On APPROVED: returns ReviewResult(verdict='APPROVED', rounds_used=N)",
         "Tests mock PRManager, AIRunner, ReviewQualityChecker; verify CHANGES REQUESTED precedence logic; verify fix loop"
       ],
-      "files": ["ralph.py", "tests/test_review_loop.py"],
-      "depends_on": ["M1-01", "M1-02", "M1-07", "M1-09", "M1-10"],
+      "files": [
+        "ralph.py",
+        "tests/test_review_loop.py"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02",
+        "M1-07",
+        "M1-09",
+        "M1-10"
+      ],
       "completed": false,
       "priority": 15
     },
@@ -362,8 +469,17 @@
         "On quality failure: ReviewLoop retries with different reviewer agent; after 2 failures from different agents sets config.skip_review=True for this task and logs REVIEWER_QUALITY_FAILED",
         "Tests: review < 80 words fails; review without verdict fails; review without file refs fails; identical to previous fails; valid review passes T1"
       ],
-      "files": ["ralph.py", "tests/test_review_quality_checker.py"],
-      "depends_on": ["M1-01", "M1-02", "M1-09", "M1-10", "M1-15"],
+      "files": [
+        "ralph.py",
+        "tests/test_review_quality_checker.py"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02",
+        "M1-09",
+        "M1-10",
+        "M1-15"
+      ],
       "completed": false,
       "priority": 16
     },
@@ -373,7 +489,7 @@
       "title": "ci_poller_parent",
       "owner": "ralph",
       "complexity": 3,
-      "description": "Parent task — decomposed into M1-17a and M1-17b.",
+      "description": "Parent task \u2014 decomposed into M1-17a and M1-17b.",
       "acceptance_criteria": [],
       "files": [],
       "depends_on": [],
@@ -397,9 +513,16 @@
         "Uses 'conclusion' field, not 'state' field, for pass/fail determination",
         "Tests mock SubprocessRunner; verify run-ID pinning logic; verify CITimeoutError raised correctly"
       ],
-      "files": ["ralph.py", "tests/test_ci_poller.py"],
+      "files": [
+        "ralph.py",
+        "tests/test_ci_poller.py"
+      ],
       "parent": "M1-17",
-      "depends_on": ["M1-01", "M1-02", "M1-03"],
+      "depends_on": [
+        "M1-01",
+        "M1-02",
+        "M1-03"
+      ],
       "completed": false,
       "priority": 17
     },
@@ -414,15 +537,25 @@
         "wait_and_fix(task: dict, pr_number: int, branch: str, prd: dict) -> CIResult builds on wait_for_completion",
         "On FAILED: fetches last 150 lines of 'gh run view --log-failed' output",
         "Invokes AIRunner.run_coder() with PromptBuilder.ci_fix_prompt(task, failure_log)",
-        "Pushes fix via SubprocessRunner, then calls _wait_for_new_run() before re-polling — never polls immediately after push",
+        "Pushes fix via SubprocessRunner, then calls _wait_for_new_run() before re-polling \u2014 never polls immediately after push",
         "Filters CI checks to only block on required=true checks (optional failing checks log warning only)",
         "After config.max_ci_fix_rounds still failing: raises CIFailedFatal",
         "Returns CIResult(passed=True, rounds_used=N) on success",
         "Tests mock SubprocessRunner and AIRunner; verify _wait_for_new_run called after push; verify optional checks don't block; verify CIFailedFatal raised after max rounds"
       ],
-      "files": ["ralph.py", "tests/test_ci_poller.py"],
+      "files": [
+        "ralph.py",
+        "tests/test_ci_poller.py"
+      ],
       "parent": "M1-17",
-      "depends_on": ["M1-01", "M1-02", "M1-03", "M1-09", "M1-10", "M1-17a"],
+      "depends_on": [
+        "M1-01",
+        "M1-02",
+        "M1-03",
+        "M1-09",
+        "M1-10",
+        "M1-17a"
+      ],
       "completed": false,
       "priority": 18
     },
@@ -432,7 +565,7 @@
       "title": "orchestrator_parent",
       "owner": "ralph",
       "complexity": 3,
-      "description": "Parent task — decomposed into M1-18a, M1-18b, M1-18c.",
+      "description": "Parent task \u2014 decomposed into M1-18a, M1-18b, M1-18c.",
       "acceptance_criteria": [],
       "files": [],
       "depends_on": [],
@@ -450,14 +583,24 @@
       "acceptance_criteria": [
         "Orchestrator(config: Config, logger: RalphLogger) constructor instantiates all component classes",
         "_preflight() validates in order: gh CLI available, git CLI available, SSH remote (via BranchManager.verify_ssh_remote()), prd.json not dirty vs origin ('git diff --quiet origin/main -- prd.json'), PlanChecker.run() passes structural checks",
-        "_preflight() logs prominent WARNING if CLAUDECODE env var is set: 'Running inside Claude Code session — reviewer unavailable, falling back to --skip-review'",
+        "_preflight() logs prominent WARNING if CLAUDECODE env var is set: 'Running inside Claude Code session \u2014 reviewer unavailable, falling back to --skip-review'",
         "_preflight() raises PreflightError with clear message on any failure",
         "_check_stop_conditions(task: dict | None) -> str | None: returns stop reason string if sprint should end (no tasks, human task next), else None",
         "Tests mock all components; verify preflight fires in correct order; verify dirty prd.json is caught; verify CLAUDECODE warning logs"
       ],
-      "files": ["ralph.py", "tests/test_orchestrator.py"],
+      "files": [
+        "ralph.py",
+        "tests/test_orchestrator.py"
+      ],
       "parent": "M1-18",
-      "depends_on": ["M1-01", "M1-02", "M1-03", "M1-04", "M1-05", "M1-06"],
+      "depends_on": [
+        "M1-01",
+        "M1-02",
+        "M1-03",
+        "M1-04",
+        "M1-05",
+        "M1-06"
+      ],
       "completed": false,
       "priority": 20
     },
@@ -470,22 +613,39 @@
       "description": "Implement Orchestrator._run_task() for standard mode: the full per-task state machine from ensure_main_up_to_date through mark_complete. Each step logs entry and exit. See DESIGN.md: Per-Task State Machine (standard mode).",
       "acceptance_criteria": [
         "_run_task(task: dict) -> TaskResult implements the standard mode state machine in exact order from DESIGN.md",
-        "BranchSyncError → TaskResult(fatal=True)",
-        "BranchExistsError (no resume) → TaskResult(fatal=True)",
-        "CoderFailedError → TaskResult(fatal=True)",
-        "PreCommitGate failure after max rounds → logs WARN, continues",
-        "TestRunner failure after max rounds → logs WARN, continues",
-        "CalledProcessError on push → TaskResult(fatal=True)",
-        "ReviewLoop max rounds exceeded → logs WARN, continues to CI",
-        "CIFailedFatal / CITimeoutError → TaskResult(fatal=True)",
-        "PRDGuardViolation → closes PR, TaskResult(fatal=True)",
-        "On success: calls TaskTracker.mark_complete(), append_progress(), commit_tracking() — in that order",
+        "BranchSyncError \u2192 TaskResult(fatal=True)",
+        "BranchExistsError (no resume) \u2192 TaskResult(fatal=True)",
+        "CoderFailedError \u2192 TaskResult(fatal=True)",
+        "PreCommitGate failure after max rounds \u2192 logs WARN, continues",
+        "TestRunner failure after max rounds \u2192 logs WARN, continues",
+        "CalledProcessError on push \u2192 TaskResult(fatal=True)",
+        "ReviewLoop max rounds exceeded \u2192 logs WARN, continues to CI",
+        "CIFailedFatal / CITimeoutError \u2192 TaskResult(fatal=True)",
+        "PRDGuardViolation \u2192 closes PR, TaskResult(fatal=True)",
+        "On success: calls TaskTracker.mark_complete(), append_progress(), commit_tracking() \u2014 in that order",
         "Returns TaskResult(fatal=False) on success",
         "Integration test mocks all components and verifies correct execution order via call sequence tracking"
       ],
-      "files": ["ralph.py", "tests/test_orchestrator.py"],
+      "files": [
+        "ralph.py",
+        "tests/test_orchestrator.py"
+      ],
       "parent": "M1-18",
-      "depends_on": ["M1-01", "M1-02", "M1-04", "M1-06", "M1-07", "M1-08", "M1-10", "M1-11", "M1-12", "M1-15", "M1-16", "M1-17b", "M1-18a"],
+      "depends_on": [
+        "M1-01",
+        "M1-02",
+        "M1-04",
+        "M1-06",
+        "M1-07",
+        "M1-08",
+        "M1-10",
+        "M1-11",
+        "M1-12",
+        "M1-15",
+        "M1-16",
+        "M1-17b",
+        "M1-18a"
+      ],
       "completed": false,
       "priority": 21
     },
@@ -505,9 +665,18 @@
         "Logs clean exit reason when loop ends normally",
         "Tests: TDD mode verifies TestWriter called before run_coder; standard mode verifies TestWriter NOT called; main loop stops on fatal task result"
       ],
-      "files": ["ralph.py", "tests/test_orchestrator.py"],
+      "files": [
+        "ralph.py",
+        "tests/test_orchestrator.py"
+      ],
       "parent": "M1-18",
-      "depends_on": ["M1-01", "M1-02", "M1-13", "M1-14", "M1-18b"],
+      "depends_on": [
+        "M1-01",
+        "M1-02",
+        "M1-13",
+        "M1-14",
+        "M1-18b"
+      ],
       "completed": false,
       "priority": 22
     },
@@ -517,7 +686,7 @@
       "title": "cli_entry_point",
       "owner": "ralph",
       "complexity": 1,
-      "description": "Implement the click CLI entry point with all flags, the rzilla command (via pyproject.toml), and --dry-run mode. This is the last task — all other classes must exist first. See DESIGN.md: CLI Interface.",
+      "description": "Implement the click CLI entry point with all flags, the rzilla command (via pyproject.toml), and --dry-run mode. This is the last task \u2014 all other classes must exist first. See DESIGN.md: CLI Interface.",
       "acceptance_criteria": [
         "Click command named 'main' decorated with all flags: --max, --skip-review, --tdd, --claude-only, --gemini-only, --opencode-only, --opencode-model, --resume, --max-test-fix-rounds, --max-test-write-rounds, --task, --validate-plan, --no-decompose, --deep-review-check, --dry-run, --repo-dir",
         "Flags map to corresponding Config dataclass fields",
@@ -529,8 +698,30 @@
         "uv run rzilla --dry-run exits 0 against the project's own prd.json",
         "Tests: --help exits 0; unknown flag exits non-zero; --dry-run against fixture prd.json exits 0"
       ],
-      "files": ["ralph.py", "tests/test_cli.py"],
-      "depends_on": ["M1-01", "M1-02", "M1-03", "M1-04", "M1-05", "M1-06", "M1-07", "M1-08", "M1-09", "M1-10", "M1-11", "M1-12", "M1-13", "M1-14", "M1-15", "M1-16", "M1-17b", "M1-18c"],
+      "files": [
+        "ralph.py",
+        "tests/test_cli.py"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02",
+        "M1-03",
+        "M1-04",
+        "M1-05",
+        "M1-06",
+        "M1-07",
+        "M1-08",
+        "M1-09",
+        "M1-10",
+        "M1-11",
+        "M1-12",
+        "M1-13",
+        "M1-14",
+        "M1-15",
+        "M1-16",
+        "M1-17b",
+        "M1-18c"
+      ],
       "completed": false,
       "priority": 23
     },
@@ -540,7 +731,7 @@
       "title": "ralph_init_discovery_wizard",
       "owner": "ralph",
       "complexity": 2,
-      "description": "Implement the 'ralph init' CLI command and DiscoveryWizard class. DiscoveryWizard asks 6 interactive questions (product description, language/runtime/package-manager, test framework + coverage tool, quality gate commands, human-only steps, out-of-scope items) and produces a ProjectSpec dataclass. 'ralph init' uses ProjectSpec to write: prd.json scaffold (with epic_addenda and quality_checks populated), CODER_INSTRUCTIONS.md, REVIEWER_INSTRUCTIONS.md, and a git hook blocking direct commits to main. No AI calls — pure interactive I/O. See DESIGN.md: DiscoveryWizard.",
+      "description": "Implement the 'ralph init' CLI command and DiscoveryWizard class. DiscoveryWizard asks 6 interactive questions (product description, language/runtime/package-manager, test framework + coverage tool, quality gate commands, human-only steps, out-of-scope items) and produces a ProjectSpec dataclass. 'ralph init' uses ProjectSpec to write: prd.json scaffold (with epic_addenda and quality_checks populated), CODER_INSTRUCTIONS.md, REVIEWER_INSTRUCTIONS.md, and a git hook blocking direct commits to main. No AI calls \u2014 pure interactive I/O. See DESIGN.md: DiscoveryWizard.",
       "acceptance_criteria": [
         "DiscoveryWizard(io: IO) class with a run() -> ProjectSpec method that asks exactly 6 questions in order",
         "ProjectSpec dataclass with fields: description, language, runtime, package_manager, test_framework, coverage_tool, quality_checks (list[str]), human_steps (list[str]), out_of_scope (list[str])",
@@ -550,8 +741,13 @@
         "Human-only steps from question 5 become owner: 'human' placeholder tasks in the generated prd.json",
         "Tests use monkeypatch/mock for stdin; verify ProjectSpec fields match answers; verify prd.json and instruction files are created; verify git hook file exists and is executable"
       ],
-      "files": ["ralph.py", "tests/test_discovery_wizard.py"],
-      "depends_on": ["M1-19"],
+      "files": [
+        "ralph.py",
+        "tests/test_discovery_wizard.py"
+      ],
+      "depends_on": [
+        "M1-19"
+      ],
       "completed": false,
       "priority": 24
     },
@@ -569,10 +765,16 @@
         "Rule 3: raises PlanInvalidError if description matches r'(?i)(password|secret|api.?key|token)' for ralph-owned tasks",
         "Rule 4: raises PlanInvalidError if any depends_on ID is not in all_task_ids",
         "PlanChecker.check_structural() calls PrdValidator.validate() for each incomplete task instead of duplicating the logic",
-        "Tests: each rule has a dedicated test — short description fails R1, description without file ref fails R2, description with 'secret' fails R3, unknown depends_on ID fails R4, valid task passes all rules"
+        "Tests: each rule has a dedicated test \u2014 short description fails R1, description without file ref fails R2, description with 'secret' fails R3, unknown depends_on ID fails R4, valid task passes all rules"
       ],
-      "files": ["ralph.py", "tests/test_prd_validator.py"],
-      "depends_on": ["M1-01", "M1-05"],
+      "files": [
+        "ralph.py",
+        "tests/test_prd_validator.py"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-05"
+      ],
       "completed": false,
       "priority": 25
     },
@@ -591,8 +793,14 @@
         "Epic prefix inference: scans existing task IDs for highest Mx prefix, increments x for new tasks (e.g. if max is M1, new tasks get M2 prefix)",
         "Tests mock AIRunner and SubprocessRunner; verify GitHub URL detection; verify PrdValidator called for each generated task; verify TaskTracker.add_task called N times"
       ],
-      "files": ["ralph.py", "tests/test_prd_generator.py"],
-      "depends_on": ["M1-10", "M3-02"],
+      "files": [
+        "ralph.py",
+        "tests/test_prd_generator.py"
+      ],
+      "depends_on": [
+        "M1-10",
+        "M3-02"
+      ],
       "completed": false,
       "priority": 26
     },
@@ -613,8 +821,14 @@
         "'ralph plan' click command accepts optional --brief TEXT argument (or reads from stdin if omitted), calls PlanConsensus.run(), prints path to ralph-plan.md",
         "Tests mock AIRunner; verify REJECT loops correctly; verify OKAY exits early; verify ralph-plan.md written; verify max_iterations respected"
       ],
-      "files": ["ralph.py", "tests/test_plan_consensus.py"],
-      "depends_on": ["M1-10", "M3-02"],
+      "files": [
+        "ralph.py",
+        "tests/test_plan_consensus.py"
+      ],
+      "depends_on": [
+        "M1-10",
+        "M3-02"
+      ],
       "completed": false,
       "priority": 27
     }

@@ -434,7 +434,7 @@ with open("prd.json", "w") as f:
     f.write("\n")
 PYEOF
       echo "[$TODAY] [$TASK_ID] $TASK_TITLE: implemented and merged (PR #$PR_NUMBER)" >> progress.txt
-      git add prd.json progress.txt
+      git add prd.json
       git commit -m "[$TASK_ID] $TASK_TITLE: mark complete"
       git push origin "$MAIN_BRANCH"
       log "Iteration $ITERATION complete (resumed): [$TASK_ID] $TASK_TITLE | $PR_URL"
@@ -853,7 +853,7 @@ with open("prd.json", "w") as f:
 print(f"  Marked $TASK_ID complete in prd.json")
 PYEOF
   echo "[$TODAY] [$TASK_ID] $TASK_TITLE: implemented and merged (PR #$PR_NUMBER)" >> progress.txt
-  git add prd.json progress.txt
+  git add prd.json
   git commit -m "[$TASK_ID] $TASK_TITLE: mark complete"
   git push origin "$MAIN_BRANCH"
 
