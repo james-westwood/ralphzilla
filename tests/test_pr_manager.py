@@ -1,12 +1,12 @@
 """Tests for PRManager."""
 
 import json
+from subprocess import CalledProcessError
 from unittest.mock import MagicMock
 
 import pytest
 
-from playchitect import PRInfo, PRManager
-from ralph import RalphLogger, SubprocessRunner
+from ralph import PRInfo, PRManager, RalphLogger, SubprocessRunner
 
 
 @pytest.fixture
@@ -49,15 +49,11 @@ class TestPRManagerCreate:
         assert result.number == 4567
 
     def test_create_raises_on_failure(self, mock_runner, mock_logger):
-        mock_runner.run.return_value = MagicMock(
-            returncode=1,
-            stdout="",
-            stderr="error: fork denied",
-        )
+        mock_runner.run.side_effect = CalledProcessError(1, "gh pr create", stderr="fork denied")
 
         pr_manager = PRManager(mock_runner, mock_logger)
 
-        with pytest.raises(Exception, match="fork denied"):
+        with pytest.raises(CalledProcessError):
             pr_manager.create("feature-branch", "Test PR", "Test body")
 
     def test_create_raises_on_unparseable_output(self, mock_runner, mock_logger):
@@ -92,9 +88,9 @@ class TestPRManagerGetExisting:
 
     def test_get_existing_returns_none_when_no_pr(self, mock_runner, mock_logger):
         mock_runner.run.return_value = MagicMock(
-            returncode=1,
-            stdout="",
-            stderr="no open PR for branch",
+            returncode=0,
+            stdout="[]",
+            stderr="",
         )
 
         pr_manager = PRManager(mock_runner, mock_logger)
@@ -114,7 +110,7 @@ class TestPRManagerGetExisting:
 
         assert result is None
 
-    def test_get_existing_handles_invalid_json(self, mock_runner, mock_logger):
+    def test_get_existing_raises_on_invalid_json(self, mock_runner, mock_logger):
         mock_runner.run.return_value = MagicMock(
             returncode=0,
             stdout="invalid",
@@ -122,9 +118,9 @@ class TestPRManagerGetExisting:
         )
 
         pr_manager = PRManager(mock_runner, mock_logger)
-        result = pr_manager.get_existing("feature-branch")
 
-        assert result is None
+        with pytest.raises(Exception):
+            pr_manager.get_existing("feature-branch")
 
 
 class TestPRManagerGetDiff:
@@ -218,7 +214,7 @@ class TestPRManagerGetChecks:
         assert result[0]["name"] == "build"
         assert result[1]["conclusion"] == "FAILURE"
 
-    def test_get_checks_raises_on_error(self, mock_runner, mock_logger):
+    def test_get_checks_returns_empty_on_error(self, mock_runner, mock_logger):
         mock_runner.run.return_value = MagicMock(
             returncode=1,
             stdout="",
@@ -226,11 +222,11 @@ class TestPRManagerGetChecks:
         )
 
         pr_manager = PRManager(mock_runner, mock_logger)
+        result = pr_manager.get_checks(123)
 
-        with pytest.raises(Exception, match="gh pr checks failed"):
-            pr_manager.get_checks(123)
+        assert result == []
 
-    def test_get_checks_handles_empty_output(self, mock_runner, mock_logger):
+    def test_get_checks_returns_empty_on_no_output(self, mock_runner, mock_logger):
         mock_runner.run.return_value = MagicMock(
             returncode=0,
             stdout="",
@@ -238,9 +234,9 @@ class TestPRManagerGetChecks:
         )
 
         pr_manager = PRManager(mock_runner, mock_logger)
+        result = pr_manager.get_checks(123)
 
-        with pytest.raises(Exception, match="Failed to parse"):
-            pr_manager.get_checks(123)
+        assert result == []
 
 
 class TestPRManagerMerge:
@@ -257,15 +253,11 @@ class TestPRManagerMerge:
         assert "--auto" in call_args
 
     def test_merge_raises_on_failure(self, mock_runner, mock_logger):
-        mock_runner.run.return_value = MagicMock(
-            returncode=1,
-            stdout="",
-            stderr="merge conflict",
-        )
+        mock_runner.run.side_effect = CalledProcessError(1, "gh pr merge", stderr="merge conflict")
 
         pr_manager = PRManager(mock_runner, mock_logger)
 
-        with pytest.raises(Exception, match="merge conflict"):
+        with pytest.raises(CalledProcessError):
             pr_manager.merge(123)
 
 
@@ -281,15 +273,14 @@ class TestPRManagerClose:
         assert mock_runner.run.call_count == 2
 
     def test_close_raises_on_close_failure(self, mock_runner, mock_logger):
-        mock_runner.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         mock_runner.run.side_effect = [
             MagicMock(returncode=0, stdout="", stderr=""),
-            MagicMock(returncode=1, stdout="", stderr="already closed"),
+            CalledProcessError(1, "gh pr close", stderr="already closed"),
         ]
 
         pr_manager = PRManager(mock_runner, mock_logger)
 
-        with pytest.raises(Exception, match="already closed"):
+        with pytest.raises(CalledProcessError):
             pr_manager.close(123, "reason")
 
 

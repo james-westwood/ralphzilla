@@ -495,11 +495,12 @@ Description: $TASK_DESC
 Acceptance criteria: $TASK_AC
 
 Implementation steps:
-1. Write source files under playchitect/ (core logic) or tests/ (tests)
-2. Run tests and fix any failures: uv run pytest tests/ -v
-3. Run pre-commit and fix all failures: uv run pre-commit run --all-files
-4. Make exactly TWO commits — no more, no fewer:
-   - Commit A (source): git add playchitect/ && git commit -m '[$TASK_ID] $TASK_TITLE: implement'
+1. Write ALL source code in ralph.py (single file — NO sub-modules, NO new directories)
+2. Write tests under tests/
+3. Run tests and fix any failures: uv run pytest tests/ -v
+4. Run pre-commit and fix all failures: uv run pre-commit run --all-files
+5. Make exactly TWO commits — no more, no fewer:
+   - Commit A (source): git add ralph.py && git commit -m '[$TASK_ID] $TASK_TITLE: implement'
    - Commit B (tests):  git add tests/ && git commit -m '[$TASK_ID] $TASK_TITLE: add tests'
 
 Do NOT push. Do NOT create a PR. Do NOT touch prd.json or progress.txt — the
@@ -508,7 +509,7 @@ orchestrator handles all of that after your PR is merged.
 Rules:
 - Never implement any task with \"owner\": \"human\"
 - Use uv for all Python commands (uv run pytest, uv sync, etc.)
-- Source under playchitect/, tests under tests/
+- ALL source code goes in ralph.py — never create sub-modules or new directories
 - Follow all conventions in CLAUDE.md"
 
   run_coder "$CODER" "$CODER_PROMPT" 2>&1 | tee -a "$LOG_FILE"
