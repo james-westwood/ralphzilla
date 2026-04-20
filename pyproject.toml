@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-ralph = "ralph:main"
+rzilla = "ralph:main"
 
 [project.optional-dependencies]
 dev = [
