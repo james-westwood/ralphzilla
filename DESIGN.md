@@ -452,6 +452,41 @@ failed  = any(c["conclusion"] in ("failure", "error") for c in checks)
 ```
 On failure: fetches `gh run view --log-failed` (last 150 lines), invokes coder with `PromptBuilder.ci_fix_prompt()`, pushes fixes, re-polls. After `max_ci_fix_rounds` failures: raises `CIFailedFatal`.
 
+### `DiscoveryWizard`
+Used by `ralph init`. Asks exactly 6 questions interactively:
+
+1. One-sentence product description
+2. Language, runtime, package manager
+3. Test framework + coverage tool
+4. Quality gate commands (pre-commit, lint, test commands that will populate `quality_checks`)
+5. Any human-only steps (credentials, infra provisioning — these become `owner: "human"` tasks)
+6. What is explicitly out of scope for this sprint
+
+Produces a `ProjectSpec` dataclass. Does **not** call AI — pure interactive I/O. Rationale: `/grill-me` is open-ended and relentless; `DiscoveryWizard` is tight and ralph-specific. 6 questions is enough to generate a valid `prd.json` scaffold without over-engineering.
+
+### `PrdValidator`
+Shared validation layer used by both `PrdGenerator` and `PlanChecker` (Tier 1). Enforces:
+
+1. `description` ≥ 100 chars
+2. At least one acceptance criterion references a file path (e.g. `tests/`, `.py`)
+3. No credential strings in ralph-owned tasks (regex: `password|secret|token|key` in description)
+4. All `depends_on` IDs exist somewhere in `prd.json`
+
+Raises `PlanInvalidError` with specific field + reason on any failure. Kept separate from `PlanChecker` so `PrdGenerator` can validate before appending without instantiating the full plan checker.
+
+### `PrdGenerator`
+Used by `ralph add`. Accepts a natural language spec string or a GitHub issue URL. If a URL is passed, fetches issue body via `gh issue view`. Calls `AIRunner` with `PromptBuilder.prd_generate_prompt()` to produce task JSON, then runs `PrdValidator` before appending to `prd.json` via `TaskTracker.add_task()`. Infers the next epic prefix from the highest existing task ID. Mirrors the `/ralph-prd` skill logic but as a typed Python class.
+
+### `PlanConsensus`
+Used by `ralph plan`. Lightweight Planner + Critic loop (max 3 iterations), analogous to `/ralplan` but without an Architect agent:
+
+1. **Planner** agent: produce a work plan from the `ProjectSpec`
+2. **Critic** agent: review against quality gates — measurable ACs, atomic tasks, no vague language
+3. If **REJECT**: send Critic feedback to Planner, increment iteration
+4. If **OKAY** or max iterations: write plan to `ralph-plan.md` and return
+
+Key difference from `/ralplan`: no Architect agent. For complex architectural decisions users can run `/ralplan` interactively first, then pass the result to `ralph plan`.
+
 ### `Orchestrator`
 Main loop. Composes everything. `_preflight()` validates tools, auth, SSH remote, prd.json structure, then runs `PlanChecker.run()` — raising `PlanInvalidError` on structural errors, logging warnings if `--validate-plan` was passed. `_run_task()` is the per-iteration state machine (see below).
 
