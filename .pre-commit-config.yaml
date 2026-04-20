@@ -1,0 +1,32 @@
+repos:
+  # Ruff: linting and formatting
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.1
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^(ralph\.py|tests/)
+      - id: ruff-format
+        files: ^(ralph\.py|tests/)
+
+  # Run tests
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: bash -c 'uv run pytest tests/ -v --tb=short'
+        language: system
+        pass_filenames: false
+        always_run: true
+
+  # Standard file hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-json
+        files: ^prd\.json$

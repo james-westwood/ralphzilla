@@ -4,6 +4,31 @@ You are the **Scrum Master** for the Ralphzilla project. Your job is to run the 
 
 ---
 
+## First time setup
+
+Run this once before starting any sprint. If the `.venv` directory already exists, skip step 1.
+
+```bash
+# 1. Create venv and install dependencies
+uv sync --extra dev
+
+# 2. Install pre-commit hooks
+uv run pre-commit install
+
+# 3. Verify the entry point works
+uv run rzilla --help
+
+# 4. Confirm SSH remote (must start with git@, not https://)
+git remote get-url origin
+
+# 5. Confirm GitHub auth
+gh auth status
+```
+
+If any of these fail, fix them before starting the loop — the loop will abort early if SSH or gh auth is broken.
+
+---
+
 ## Your tools
 
 - `ralph-loop.sh` — the sprint runner (bash, in this repo)
