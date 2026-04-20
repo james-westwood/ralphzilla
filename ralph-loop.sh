@@ -563,7 +563,7 @@ Do NOT push."
 
   # ── Short-circuit: no new commits means task was already implemented ───────
 
-  if git diff --quiet "origin/$MAIN_BRANCH" HEAD 2>/dev/null; then
+  if [[ -z "$(git log "origin/$MAIN_BRANCH..HEAD" --oneline 2>/dev/null)" ]]; then
     log "  No new commits vs main — task already implemented in scaffold. Marking complete directly."
     git checkout "$MAIN_BRANCH"
     git branch -D "$BRANCH" 2>/dev/null || true
