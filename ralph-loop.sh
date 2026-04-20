@@ -134,11 +134,17 @@ run_coder() {
     fi
   else
     # opencode — --dangerously-skip-permissions required for unattended file writes
-    if opencode run -m "$OPENCODE_CODER_MODEL" --dangerously-skip-permissions "$prompt"; then
+    # timeout 15m: big-pickle can hang indefinitely on API outages
+    if timeout 15m opencode run -m "$OPENCODE_CODER_MODEL" --dangerously-skip-permissions "$prompt"; then
       return 0
     else
-      log "  opencode coder failed — falling back to Claude"
-      env -u CLAUDECODE claude --dangerously-skip-permissions --print "$prompt"
+      local exit_code=$?
+      if [[ $exit_code -eq 124 ]]; then
+        log "  opencode coder timed out after 15m — falling back to Claude"
+      else
+        log "  opencode coder failed (exit $exit_code) — falling back to Claude"
+      fi
+      env -u CLAUDECODE claude --dangerously-skip-permissions --print "$prompt" || true
     fi
   fi
 }
