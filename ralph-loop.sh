@@ -560,6 +560,34 @@ Do NOT push."
     fi
   done
 
+  # ── Short-circuit: no new commits means task was already implemented ───────
+
+  if git diff --quiet "origin/$MAIN_BRANCH" HEAD 2>/dev/null; then
+    log "  No new commits vs main — task already implemented in scaffold. Marking complete directly."
+    git checkout "$MAIN_BRANCH"
+    git branch -D "$BRANCH" 2>/dev/null || true
+    git push origin --delete "$BRANCH" 2>/dev/null || true
+    # Mark complete inline (same logic as post-merge block)
+    python3 - <<PYEOF
+import json
+with open("prd.json") as f:
+    prd = json.load(f)
+task = next((t for t in prd["tasks"] if t["id"] == "$TASK_ID"), None)
+if task:
+    task["completed"] = True
+    with open("prd.json", "w") as f:
+        json.dump(prd, f, indent=2)
+        f.write("\n")
+    print(f"  Marked $TASK_ID complete in prd.json (no-new-commits fast path)")
+PYEOF
+    echo "[$TODAY] [$TASK_ID] $TASK_TITLE: already implemented (scaffold) — marked complete" >> progress.txt
+    git add prd.json
+    git commit -m "[$TASK_ID] $TASK_TITLE: mark complete (already implemented in scaffold)"
+    git push origin "$MAIN_BRANCH"
+    log "Iteration $ITERATION complete (fast path): [$TASK_ID] $TASK_TITLE"
+    continue
+  fi
+
   # ── Push and open PR ───────────────────────────────────────────────────────
 
   log "  Pushing $BRANCH..."
