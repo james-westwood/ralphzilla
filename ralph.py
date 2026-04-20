@@ -166,7 +166,6 @@ class PreCommitResult:
 
 @dataclass
 class TestResult:
-    __test__ = False
     passed: bool
     rounds_used: int
 
@@ -194,7 +193,6 @@ class PlanCheckResult:
 
 @dataclass
 class TestQualityResult:
-    __test__ = False
     passed: bool
     hollow_tests: list[str]  # test names that failed quality checks
     deterministic_issues: list[str]  # ast-detected problems
