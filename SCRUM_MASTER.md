@@ -115,6 +115,8 @@ Exit code 0 alone is **not** a reliable success signal — always verify against
 | `prd.json` modified in diff | Coder touched prd.json | Close the PR, re-run same task |
 | `CI failed after N rounds` | Persistent CI failure | Check `gh run view --log-failed`, create a fix task |
 | `reviewer.*no output` / empty review | Nested Claude reviewer failed | Restart with `--skip-review` |
+| Loop dies at `Running reviewer` with no log output | All reviewer backends failed; `set -e` killed script | `gh pr close <N>` then restart with `--skip-review --resume` |
+| opencode reviewer times out (exit 124) | opencode API down or model unavailable | Use `--opencode-reviewer-model google/gemini-2.0-flash` or `--skip-review` |
 | `ff-only` / `diverged` | Local main diverged | `git fetch origin main && git reset --hard origin/main` |
 | No clean-exit marker in log | Silent mid-loop crash | Check for half-open PRs, close them, restart with `--resume` |
 
