@@ -263,7 +263,7 @@
       "depends_on": [
         "M1-01"
       ],
-      "completed": false,
+      "completed": true,
       "priority": 9
     },
     {
