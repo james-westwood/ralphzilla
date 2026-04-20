@@ -1588,7 +1588,12 @@ class CIPoller:
         self.config = config
 
     def _get_latest_run_id(self, branch: str) -> str:
-        """Gets the latest run ID for a branch using gh run list."""
+        """Gets the latest run ID for a branch using gh run list.
+
+        Runs: gh run list --branch <branch> --json databaseId --jq .[0].databaseId
+
+        Returns the run ID or raises CITimeoutError if no run is found.
+        """
         result = self.runner.run(
             [
                 "gh",
@@ -1609,7 +1614,11 @@ class CIPoller:
         return run_id
 
     def _wait_for_run(self, run_id: str) -> str:
-        """Polls a specific run ID until completion. Returns 'PASSED' or 'FAILED'."""
+        """Polls a specific run ID until completion.
+
+        Polls 'gh run view <run_id> --json status,conclusion' every CI_POLL_INTERVAL_SECS.
+        Returns 'PASSED' or 'FAILED'. Raises CITimeoutError after CI_POLL_MAX_ATTEMPTS.
+        """
         attempts = 0
         while attempts < CI_POLL_MAX_ATTEMPTS:
             result = self.runner.run(
@@ -1647,7 +1656,10 @@ class CIPoller:
         )
 
     def _wait_for_new_run(self, branch: str, prev_run_id: str, timeout: int = 180) -> str:
-        """Polls until a new run ID appears. Returns new run ID or raises CITimeoutError."""
+        """Polls gh run list every 10s until a different run ID appears.
+
+        Returns new run ID. Raises CITimeoutError if no new run after timeout seconds.
+        """
         start_time = time.time()
         while time.time() - start_time < timeout:
             try:
@@ -1664,10 +1676,20 @@ class CIPoller:
         raise CITimeoutError(f"No new run appeared for branch {branch} after {timeout}s")
 
     def wait_for_completion(self, pr_number: int, branch: str) -> CIResult:
-        """Waits for CI to complete using run-ID pinning. Returns CIResult."""
+        """Waits for CI to complete using run-ID pinning.
+
+        Uses the 'conclusion' field (not 'state') for pass/fail determination.
+        Treats empty checks list as PENDING.
+        """
         self.logger.info(f"Waiting for CI on PR #{pr_number} (branch: {branch})")
 
-        run_id = self._get_latest_run_id(branch)
+        try:
+            run_id = self._get_latest_run_id(branch)
+        except CITimeoutError:
+            self.logger.info("No run found yet — treating as PENDING")
+            return CIResult(passed=False, rounds_used=0)
+
+        self.logger.info(f"Found run ID: {run_id}")
         self.logger.info(f"Found run ID: {run_id}")
 
         conclusion = self._wait_for_run(run_id)
