@@ -1225,6 +1225,190 @@
       ],
       "epic": "M5",
       "complexity": 1
+    },
+    {
+      "id": "M6-01",
+      "title": "multi_runtime_abstraction_layer",
+      "description": "Design and implement an abstraction layer in ralph.py to support multiple AI runtimes. Create a base `AIRunner` abstract class with common interface methods: `run_task(task_id, branch_name)` that returns completion status and output. Define the contract that all runtime implementations must follow including: command execution, output capture, error handling, and timeout management. This enables plugging in different AI tools (Aider, Cursor, Cline, Codex) without changing the core ralph loop logic. The abstraction should handle runtime detection, version checking, and graceful degradation when a runtime is unavailable.",
+      "acceptance_criteria": [
+        "tests/test_runner.py: AIRunner base class exists with abstract methods",
+        "tests/test_runner.py: Runtime configuration schema validates correctly",
+        "tests/test_runner.py: Unsupported runtime raises clear error",
+        "ralph.py: Base runner class implemented with proper abc module usage"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [],
+      "epic": "M6",
+      "complexity": 2
+    },
+    {
+      "id": "M6-02",
+      "title": "aider_runtime_support",
+      "description": "Implement Aider runtime support by creating `AiderRunner` class that extends the AIRunner abstraction. Integrate with Aider's CLI interface to run tasks on branches. Handle Aider-specific flags like --model, --message, and --file. Capture Aider's output including any file modifications made during the session. Implement proper timeout handling since Aider may prompt for user input. Add detection logic to verify Aider is installed and accessible. This allows ralph to use Aider as an alternative AI coding agent alongside Claude.",
+      "acceptance_criteria": [
+        "tests/test_aider_runner.py: AiderRunner detects aider CLI availability",
+        "tests/test_aider_runner.py: run_task() executes aider with correct arguments",
+        "tests/test_aider_runner.py: Output capture includes file modification summaries",
+        "tests/test_aider_runner.py: Timeout handling prevents indefinite hangs",
+        "ralph.py: AiderRunner class implemented and registered"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M6-01"
+      ],
+      "epic": "M6",
+      "complexity": 2
+    },
+    {
+      "id": "M6-03",
+      "title": "cursor_runtime_support",
+      "description": "Implement Cursor IDE runtime support via its CLI interface. Create `CursorRunner` class extending AIRunner that launches Cursor with headless mode flags when available. Handle Cursor's specific command structure for opening projects and executing AI commands. Since Cursor is primarily GUI-based, implement a fallback mechanism that generates Cursor-compatible prompts or workspace files that a user can open manually. Capture any CLI output or logs that Cursor produces. Add version detection and compatibility checking for Cursor CLI features.",
+      "acceptance_criteria": [
+        "tests/test_cursor_runner.py: CursorRunner detects cursor CLI availability",
+        "tests/test_cursor_runner.py: run_task() generates cursor-compatible workspace data",
+        "tests/test_cursor_runner.py: Fallback mode creates usable prompt files",
+        "tests/test_cursor_runner.py: Version checking validates CLI compatibility",
+        "ralph.py: CursorRunner class implemented and registered"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M6-01"
+      ],
+      "epic": "M6",
+      "complexity": 2
+    },
+    {
+      "id": "M6-04",
+      "title": "cline_runtime_support",
+      "description": "Implement Cline (VS Code extension) runtime support. Create `ClineRunner` class extending AIRunner that interfaces with Cline's VS Code extension capabilities. Since Cline operates within VS Code, implement integration through VS Code CLI commands to open repositories and trigger Cline sessions. Generate Cline-compatible task prompts that can be pasted into the Cline interface. Create a workflow that prepares the environment (branch, files) for Cline to process. Handle Cline-specific output formats and capture any generated code or modifications. Include detection for VS Code and Cline extension availability.",
+      "acceptance_criteria": [
+        "tests/test_cline_runner.py: ClineRunner detects VS Code and Cline extension",
+        "tests/test_cline_runner.py: run_task() prepares Cline-compatible environment",
+        "tests/test_cline_runner.py: Generated prompts follow Cline's expected format",
+        "tests/test_cline_runner.py: Output capture handles Cline's response patterns",
+        "ralph.py: ClineRunner class implemented and registered"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M6-01"
+      ],
+      "epic": "M6",
+      "complexity": 2
+    },
+    {
+      "id": "M6-05",
+      "title": "codex_runtime_support",
+      "description": "Implement Codex CLI runtime support for OpenAI's Codex coding agent. Create `CodexRunner` class extending AIRunner that invokes the `codex` command-line tool with appropriate flags. Handle Codex-specific parameters like --approval-mode, --model, and context file specifications. Capture Codex's structured output including file edits, shell commands executed, and completion status. Implement proper working directory handling since Codex may modify files in place. Add automatic retry logic for transient API failures. Include version checking to ensure compatible Codex CLI version is installed.",
+      "acceptance_criteria": [
+        "tests/test_codex_runner.py: CodexRunner detects codex CLI availability",
+        "tests/test_codex_runner.py: run_task() executes codex with correct flags",
+        "tests/test_codex_runner.py: File modifications are captured and reported",
+        "tests/test_codex_runner.py: API error handling with retry logic works",
+        "ralph.py: CodexRunner class implemented and registered"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M6-01"
+      ],
+      "epic": "M6",
+      "complexity": 2
+    },
+    {
+      "id": "M6-06",
+      "title": "ralph_verify_command",
+      "description": "Implement `ralph verify` CLI command for post-sprint acceptance criteria checking. The command takes a task ID, reads its acceptance_criteria from prd.json, sends both the criteria and the actual implemented code to an AI (Claude or configured default), and asks whether the criteria are satisfied. The AI evaluates each criterion against the codebase and returns a structured verdict: passed/failed/partial for each item. Output includes a detailed report showing which criteria passed, which failed, and why. The command returns exit code 0 if all criteria passed, non-zero otherwise. This enables automated quality gates before marking tasks complete.",
+      "acceptance_criteria": [
+        "tests/test_verify_command.py: Command accepts task ID argument",
+        "tests/test_verify_command.py: Sends ACs + code to AI for evaluation",
+        "tests/test_verify_command.py: Parses AI response into pass/fail/partial verdicts",
+        "tests/test_verify_command.py: Exit code 0 on all passed, non-zero otherwise",
+        "tests/test_verify_command.py: Reports detail which criteria failed and why",
+        "ralph.py: verify() CLI command implemented with click"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [],
+      "epic": "M6",
+      "complexity": 2
+    },
+    {
+      "id": "M6-07",
+      "title": "spike_mode_command",
+      "description": "Implement `ralph spike TASK_ID` command for experimental task execution. This command runs a task on a throwaway branch (spike/TASK_ID/timestamp naming), executes the AI coding agent, captures what was produced (files changed, code written, approach taken), and reports a summary without opening a PR. The branch is created from current HEAD, task runs with full logging, then results are displayed including: files modified, lines changed, any errors encountered, and a brief summary of the implementation approach. The throwaway branch remains for manual inspection but no PR is created. This allows exploring solutions without polluting the main codebase or review queue.",
+      "acceptance_criteria": [
+        "tests/test_spike_command.py: Creates throwaway branch with correct naming",
+        "tests/test_spike_command.py: Runs task and captures full output",
+        "tests/test_spike_command.py: Reports files modified and line counts",
+        "tests/test_spike_command.py: No PR is created after completion",
+        "tests/test_spike_command.py: Branch remains for manual inspection",
+        "ralph.py: spike() CLI command implemented"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [],
+      "epic": "M6",
+      "complexity": 2
+    },
+    {
+      "id": "M6-08",
+      "title": "prompt_injection_detection",
+      "description": "Implement prompt injection detection and sanitization for AI output before it's used as input to subsequent prompts. Create a `PromptSanitizer` class that scans AI-generated content for injection patterns: attempts to override instructions (ignore previous, new instructions), delimiter escaping, role confusion prompts, and hidden Unicode tricks. Implement sanitization rules that neutralize detected patterns by escaping special characters, adding guard delimiters, or raising warnings. Apply sanitization at all points where AI output becomes input: when task descriptions are passed between agents, when code is extracted for review, when commit messages are generated. Log all sanitization actions for audit purposes. This prevents malicious or accidental prompt injection attacks in the multi-agent workflow.",
+      "acceptance_criteria": [
+        "tests/test_prompt_sanitizer.py: Detects 'ignore previous instructions' patterns",
+        "tests/test_prompt_sanitizer.py: Detects delimiter injection attempts",
+        "tests/test_prompt_sanitizer.py: Detects role confusion prompts",
+        "tests/test_prompt_sanitizer.py: Sanitizes output without losing meaning",
+        "tests/test_prompt_sanitizer.py: Logs sanitization actions with reason",
+        "ralph.py: PromptSanitizer class integrated at AI output boundaries"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [],
+      "epic": "M6",
+      "complexity": 2
+    },
+    {
+      "id": "M6-09",
+      "title": "architectural_decision_tracking",
+      "description": "Implement architectural decision (AD) extraction and storage from completed tasks. Create an `ArchitecturalDecisionStore` that parses completed task descriptions and acceptance criteria for explicit design decisions stated with phrases like 'DECISION:', 'ARCHITECTURE:', 'DESIGN CHOICE:'. When a task is marked complete in the ralph loop, extract these decisions along with the task ID and store them in .ralph/ad_store.json. Each entry contains: decision text, task ID, timestamp, and relevant files. This creates a searchable record of why certain architectural choices were made. The store is append-only and versioned. Include a method to query decisions by file path or keyword to support conflict detection.",
+      "acceptance_criteria": [
+        "tests/test_ad_store.py: Extracts DECISION markers from task descriptions",
+        "tests/test_ad_store.py: Stores decisions in .ralph/ad_store.json",
+        "tests/test_ad_store.py: Each entry includes task ID, timestamp, files",
+        "tests/test_ad_store.py: Query by file path returns relevant decisions",
+        "tests/test_ad_store.py: Query by keyword returns matching decisions",
+        "ralph.py: ArchitecturalDecisionStore class with extract and query methods"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [],
+      "epic": "M6",
+      "complexity": 2
+    },
+    {
+      "id": "M6-10",
+      "title": "ad_conflict_detection_system",
+      "description": "Implement conflict detection between new tasks and stored architectural decisions. Create an `ADConflictDetector` that analyzes a task's description and acceptance criteria before execution, comparing them against the `ArchitecturalDecisionStore`. Detect contradictions using pattern matching: opposing keywords (e.g., 'use X' vs 'do not use X'), conflicting file structure changes, or negation of previous decisions. When a conflict is detected, emit a warning showing: the new task's conflicting text, the stored decision it contradicts, the original task ID, and a confidence score. The ralph loop can then pause for human review or require an explicit override flag. This prevents accidental violation of intentional design choices made in earlier tasks.",
+      "acceptance_criteria": [
+        "tests/test_ad_conflict.py: Detects direct contradictions (use vs do not use)",
+        "tests/test_ad_conflict.py: Detects structural conflicts in file patterns",
+        "tests/test_ad_conflict.py: Returns confidence score with each conflict",
+        "tests/test_ad_conflict.py: Warning includes original task ID for reference",
+        "tests/test_ad_conflict.py: Can be overridden with --force-ad-override flag",
+        "ralph.py: ADConflictDetector integrated into task execution flow"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M6-09"
+      ],
+      "epic": "M6",
+      "complexity": 2
     }
   ]
 }
