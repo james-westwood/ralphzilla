@@ -377,6 +377,19 @@ class BranchStatus:
 class TaskResult:
     fatal: bool
     message: str = ""
+    duration: float = 0.0
+
+
+@dataclass
+class WaveSummary:
+    """Per-wave execution summary stored in ExecutionReport.wave_histories."""
+
+    wave_number: int
+    total: int
+    succeeded: int
+    failed: int
+    skipped: int
+    results: dict[str, TaskResult]  # task_id -> TaskResult for all tasks in this wave
 
 
 @dataclass
@@ -386,6 +399,7 @@ class ExecutionReport:
     results: dict[str, TaskResult]  # task_id -> TaskResult
     waves_run: int
     tasks_blocked: list[str] = field(default_factory=list)  # IDs skipped due to failed deps
+    wave_histories: list[WaveSummary] = field(default_factory=list)  # per-wave summaries
 
 
 @dataclass
@@ -575,20 +589,24 @@ class WaveExecutor:
         all_results: dict[str, TaskResult] = {}
         failed_ids: set[str] = set()
         blocked_ids: list[str] = []
+        wave_histories: list[WaveSummary] = []
 
-        for wave in waves:
+        for wave_number, wave in enumerate(waves, start=1):
             runnable: list[str] = []
+            wave_skipped: list[str] = []
             for tid in wave:
                 deps = self._tasks.get(tid, {}).get("depends_on", [])
                 if any(dep in failed_ids for dep in deps):
                     blocked_ids.append(tid)
+                    wave_skipped.append(tid)
                     all_results[tid] = TaskResult(fatal=True, message="blocked: dependency failed")
                 else:
                     runnable.append(tid)
 
             # Blocked tasks are also failures for dependency propagation
-            failed_ids.update(blocked_ids)
+            failed_ids.update(wave_skipped)
 
+            wave_results: dict[str, TaskResult] = {}
             if runnable:
                 wave_results = self.execute_wave(runnable)
                 all_results.update(wave_results)
@@ -596,11 +614,74 @@ class WaveExecutor:
                     if result.fatal:
                         failed_ids.add(tid)
 
+            # Include skipped tasks in wave results for summary reporting
+            for tid in wave_skipped:
+                wave_results[tid] = all_results[tid]
+
+            self.print_wave_summary(wave_results, wave_number, wave_skipped)
+            succeeded = sum(1 for tid, r in wave_results.items() if not r.fatal)
+            failed = sum(
+                1 for tid, r in wave_results.items() if r.fatal and tid not in wave_skipped
+            )
+            wave_histories.append(
+                WaveSummary(
+                    wave_number=wave_number,
+                    total=len(wave),
+                    succeeded=succeeded,
+                    failed=failed,
+                    skipped=len(wave_skipped),
+                    results=dict(wave_results),
+                )
+            )
+
         return ExecutionReport(
             results=all_results,
             waves_run=len(waves),
             tasks_blocked=blocked_ids,
+            wave_histories=wave_histories,
         )
+
+    def print_wave_summary(
+        self,
+        wave_results: dict[str, TaskResult],
+        wave_number: int,
+        skipped_ids: list[str] | None = None,
+    ) -> None:
+        """Print a human-readable summary of a completed wave to stdout.
+
+        Args:
+            wave_results: Mapping of task_id -> TaskResult for all tasks in the wave.
+            wave_number:  1-based wave index.
+            skipped_ids:  Task IDs that were skipped due to dependency failures.
+        """
+        skipped_set = set(skipped_ids or [])
+        succeeded = [tid for tid, r in wave_results.items() if not r.fatal]
+        failed = [tid for tid, r in wave_results.items() if r.fatal and tid not in skipped_set]
+        skipped = [tid for tid in wave_results if tid in skipped_set]
+        total = len(wave_results)
+
+        header = click.style(f"── Wave {wave_number} complete ", fg="white", bold=True)
+        succeeded_txt = click.style(f"{len(succeeded)} succeeded", fg="green")
+        failed_txt = click.style(f"{len(failed)} failed", fg="red")
+        skipped_txt = click.style(f"{len(skipped)} skipped", fg="yellow")
+        click.echo(f"\n{header}({total} tasks: {succeeded_txt}, {failed_txt}, {skipped_txt})")
+
+        for tid in sorted(wave_results):
+            result = wave_results[tid]
+            duration_str = f"{result.duration:.1f}s"
+            if tid in skipped_set:
+                symbol = click.style("⊘", fg="yellow")
+                status = click.style("skipped", fg="yellow")
+                click.echo(f"  {symbol} {tid}  {status}  {duration_str}")
+            elif result.fatal:
+                symbol = click.style("✗", fg="red")
+                status = click.style("failed", fg="red")
+                err = f"  — {result.message}" if result.message else ""
+                click.echo(f"  {symbol} {tid}  {status}  {duration_str}{err}")
+            else:
+                symbol = click.style("✓", fg="green")
+                status = click.style("ok", fg="green")
+                click.echo(f"  {symbol} {tid}  {status}  {duration_str}")
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -622,11 +703,13 @@ class WaveExecutor:
     ) -> tuple[str, TaskResult]:
         async with semaphore:
             runner = self._task_runner
+            t0 = time.monotonic()
             if asyncio.iscoroutinefunction(runner):
                 result = await runner(task_id)
             else:
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(None, runner, task_id)
+            result.duration = time.monotonic() - t0
             return task_id, result
 
 
