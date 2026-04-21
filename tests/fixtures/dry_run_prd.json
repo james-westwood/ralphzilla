@@ -1,0 +1,107 @@
+{
+  "project": "ralphzilla-test",
+  "description": "Test project for dry-run smoke test",
+  "quality_checks": [
+    "uv run pytest tests/ -v",
+    "uv run ruff check ralph.py tests/"
+  ],
+  "epic_addenda": {
+    "M2": "All tests go in tests/ directory only."
+  },
+  "tasks": [
+    {
+      "id": "M2-01",
+      "epic": "M2",
+      "title": "First completed task",
+      "description": "This is first completed task that serves as a dependency for other tasks in the chain. It is already marked complete to provide the foundation for pending tasks.",
+      "acceptance_criteria": [
+        "First completed task passes all quality checks",
+        "First completed task verifies base functionality with tests/test_sample.py"
+      ],
+      "files": [
+        "tests/test_sample.py"
+      ],
+      "owner": "ralph",
+      "completed": true,
+      "depends_on": [],
+      "priority": 1
+    },
+    {
+      "id": "M2-02",
+      "epic": "M2",
+      "title": "Second completed task",
+      "description": "This is a second completed task demonstrating multiple completed tasks in the test fixture. Used to verify that completed tasks are properly filtered out during dry-run.",
+      "acceptance_criteria": [
+        "Second completed task has passing tests in tests/test_example.py"
+      ],
+      "files": [
+        "tests/test_example.py"
+      ],
+      "owner": "ralph",
+      "completed": true,
+      "depends_on": [
+        "M2-01"
+      ],
+      "priority": 2
+    },
+    {
+      "id": "M2-03",
+      "epic": "M2",
+      "title": "Pending task with multiple dependencies",
+      "description": "A pending task that depends on both completed tasks M2-01 and M2-02. This verifies that the dry-run correctly identifies tasks whose dependencies are all satisfied.",
+      "acceptance_criteria": [
+        "Pending task with dependencies completes successfully",
+        "Both M2-01 and M2-02 dependencies are satisfied",
+        "Task processes multiple dependency chains with tests/test_multi_dep.py"
+      ],
+      "files": [
+        "tests/test_multi_dep.py"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M2-01",
+        "M2-02"
+      ],
+      "priority": 3
+    },
+    {
+      "id": "M2-04",
+      "epic": "M2",
+      "title": "Pending task with single dependency",
+      "description": "A pending task that depends only on M2-03. This creates a chain: M2-01 -> M2-02 -> M2-03 -> M2-04 to verify sequential dependency resolution.",
+      "acceptance_criteria": [
+        "Single dependency chain is properly resolved",
+        "M2-03 is completed before M2-04 executes",
+        "Tests verify chain ordering with tests/test_chain.py"
+      ],
+      "files": [
+        "tests/test_chain.py"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M2-03"
+      ],
+      "priority": 4
+    },
+    {
+      "id": "M2-05",
+      "epic": "M2",
+      "title": "Independent pending task",
+      "description": "A pending task with no dependencies that should be selectable immediately alongside other ready tasks. This tests independent task filtering.",
+      "acceptance_criteria": [
+        "Independent task is selectable immediately",
+        "No dependency checking required for this task",
+        "Tests verify independence with tests/test_independent.py"
+      ],
+      "files": [
+        "tests/test_independent.py"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [],
+      "priority": 5
+    }
+  ]
+}
