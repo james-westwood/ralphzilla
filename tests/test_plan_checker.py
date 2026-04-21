@@ -11,8 +11,9 @@ def test_check_structural_valid():
             {
                 "id": "T1",
                 "title": "T1",
-                "description": "Desc",
-                "acceptance_criteria": ["AC1"],
+                "description": "This is a valid task description that is definitely longer "
+                "than one hundred characters to satisfy the prd validator rule.",
+                "acceptance_criteria": ["Must update tests/test_module.py"],
                 "owner": "ralph",
                 "completed": False,
             }
@@ -47,7 +48,8 @@ def test_check_structural_empty_ac():
             {
                 "id": "T1",
                 "title": "T1",
-                "description": "Desc",
+                "description": "This is a valid task description that is definitely longer "
+                "than one hundred characters to satisfy the prd validator rule.",
                 "acceptance_criteria": [],
                 "owner": "ralph",
                 "completed": False,
@@ -65,8 +67,9 @@ def test_check_structural_unresolved_dep():
             {
                 "id": "T1",
                 "title": "T1",
-                "description": "Desc",
-                "acceptance_criteria": ["AC1"],
+                "description": "This is a valid task description that is definitely longer "
+                "than one hundred characters to satisfy the prd validator rule.",
+                "acceptance_criteria": ["Must update tests/test_module.py"],
                 "owner": "ralph",
                 "completed": False,
                 "depends_on": ["T2"],
