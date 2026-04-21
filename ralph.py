@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+import click
+
 # --- Constants ---
 
 DEFAULT_MAX_ITERATIONS = 10
@@ -2128,7 +2130,183 @@ class Orchestrator:
         self.logger.info("Loop finished.")
 
 
-def main() -> int:
+@click.command()
+@click.option(
+    "--max",
+    "max_iterations",
+    default=DEFAULT_MAX_ITERATIONS,
+    help="Max iterations (default: 10)",
+)
+@click.option(
+    "--skip-review",
+    is_flag=True,
+    default=False,
+    help="Skip AI review, merge on CI pass",
+)
+@click.option(
+    "--tdd",
+    "tdd_mode",
+    is_flag=True,
+    default=False,
+    help="TDD mode: separate test-writer agent writes tests before coder",
+)
+@click.option(
+    "--claude-only",
+    is_flag=True,
+    default=False,
+    help="Use Claude for all agent roles",
+)
+@click.option(
+    "--gemini-only",
+    is_flag=True,
+    default=False,
+    help="Use Gemini for all agent roles",
+)
+@click.option(
+    "--opencode-only",
+    is_flag=True,
+    default=False,
+    help="Use opencode for all agent roles",
+)
+@click.option(
+    "--opencode-model",
+    default=DEFAULT_OPENCODE_MODEL,
+    help="Override opencode model (default: opencode/kimi-k2.5)",
+)
+@click.option(
+    "--resume",
+    is_flag=True,
+    default=False,
+    help="Resume stale branches from interrupted runs",
+)
+@click.option(
+    "--max-test-fix-rounds",
+    "max_test_fix_rounds",
+    default=DEFAULT_MAX_TEST_FIX_ROUNDS,
+    help="Max AI fix rounds for test failures (default: 2)",
+)
+@click.option(
+    "--max-test-write-rounds",
+    "max_test_write_rounds",
+    default=DEFAULT_MAX_TEST_FIX_ROUNDS,
+    help="TDD: max rounds to get hollow-free tests (default: 2)",
+)
+@click.option(
+    "--task",
+    "force_task_id",
+    default=None,
+    help="Force a specific task",
+)
+@click.option(
+    "--validate-plan",
+    is_flag=True,
+    default=False,
+    help="AI sanity check on prd.json before sprint (warns, does not block)",
+)
+@click.option(
+    "--no-decompose",
+    is_flag=True,
+    default=False,
+    help="Skip auto-decomposition of complexity-3 tasks",
+)
+@click.option(
+    "--deep-review-check",
+    "deep_review_check",
+    is_flag=True,
+    default=False,
+    help="Enable AI meta-review quality check on every review",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Print steps without executing AI calls or git ops",
+)
+@click.option(
+    "--repo-dir",
+    "repo_dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Repo root (default: directory containing ralph.py)",
+)
+def main(
+    max_iterations: int,
+    skip_review: bool,
+    tdd_mode: bool,
+    claude_only: bool,
+    gemini_only: bool,
+    opencode_only: bool,
+    opencode_model: str,
+    resume: bool,
+    max_test_fix_rounds: int,
+    max_test_write_rounds: int,
+    force_task_id: str | None,
+    validate_plan: bool,
+    no_decompose: bool,
+    deep_review_check: bool,
+    dry_run: bool,
+    repo_dir: Path | None,
+) -> int:
+    if repo_dir is None:
+        repo_dir = Path(__file__).parent.resolve()
+
+    log_file = repo_dir / LOG_FILE_NAME
+
+    config = Config(
+        max_iterations=max_iterations,
+        skip_review=skip_review,
+        tdd_mode=tdd_mode,
+        model_mode="random",
+        opencode_model=opencode_model,
+        resume=resume,
+        repo_dir=repo_dir,
+        log_file=log_file,
+        max_precommit_rounds=DEFAULT_MAX_PRECOMMIT_ROUNDS,
+        max_review_rounds=DEFAULT_MAX_REVIEW_ROUNDS,
+        max_ci_fix_rounds=DEFAULT_MAX_CI_FIX_ROUNDS,
+        max_test_fix_rounds=max_test_fix_rounds,
+        max_test_write_rounds=max_test_write_rounds,
+        force_task_id=force_task_id,
+        deep_review_check=deep_review_check,
+        claude_only=claude_only,
+        gemini_only=gemini_only,
+        opencode_only=opencode_only,
+    )
+
+    logger = RalphLogger(log_file)
+
+    if dry_run:
+        logger.info("[DRY-RUN] Starting dry-run mode...")
+
+        prd_path = repo_dir / PRD_FILE
+        if not prd_path.exists():
+            logger.error(f"[DRY-RUN] No prd.json found at {prd_path}")
+            return 1
+
+        with open(prd_path, "r", encoding="utf-8") as f:
+            prd = json.load(f)
+
+        tasks = prd.get("tasks", [])
+        for task in tasks:
+            if task.get("completed"):
+                continue
+            if task.get("owner") == "human":
+                continue
+            if task.get("decomposed"):
+                continue
+
+            acs = task.get("acceptance_criteria", [])
+            estimated_action = "invoke AI coder with task prompt"
+            logger.info(f"[DRY-RUN] Would process: {task['id']} {task['title']}")
+            logger.info(f"[DRY-RUN]   estimated_action: {estimated_action}")
+            logger.info(f"[DRY-RUN]   acceptance_criteria: {len(acs)} criteria")
+
+        logger.info("[DRY-RUN] Dry-run complete.")
+        return 0
+
+    orchestrator = Orchestrator(config, logger)
+    orchestrator.run(config.max_iterations)
+
     return 0
 
 
