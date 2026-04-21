@@ -1690,7 +1690,6 @@ class CIPoller:
             return CIResult(passed=False, rounds_used=0)
 
         self.logger.info(f"Found run ID: {run_id}")
-        self.logger.info(f"Found run ID: {run_id}")
 
         conclusion = self._wait_for_run(run_id)
 
@@ -1701,15 +1700,54 @@ class CIPoller:
         self.logger.error(f"CI failed with conclusion: {conclusion}")
         return CIResult(passed=False, rounds_used=1)
 
+    def _check_required_failures(self, pr_number: int) -> tuple[bool, list[str]]:
+        """Checks required CI checks for failures.
+
+        Filters to only required=true checks. Optional check failures log warning only.
+        Returns (has_required_failure, list of failing required check names).
+        On any error fetching checks, returns (False, []) — fail-open to avoid blocking.
+        """
+        try:
+            pr_manager = PRManager(self.runner, self.logger)
+            checks = pr_manager.get_checks(pr_number)
+        except Exception as exc:
+            self.logger.warn(f"Could not fetch PR checks (skipping required-check filter): {exc}")
+            return False, []
+
+        required_failures = []
+        optional_failures = []
+
+        for check in checks:
+            conclusion = check.get("conclusion", "")
+            if conclusion and conclusion.upper() in ("FAILURE", "ERROR"):
+                if check.get("required", True):
+                    required_failures.append(check.get("name", "unknown"))
+                else:
+                    optional_failures.append(check.get("name", "unknown"))
+
+        for name in optional_failures:
+            self.logger.warn(f"Optional check failed (ignored): {name}")
+
+        return bool(required_failures), required_failures
+
     def wait_and_fix(self, task: dict, pr_number: int, branch: str, prd: dict) -> CIResult:
-        """Waits for CI, on failure invokes coder fix loop, re-polls."""
+        """Waits for CI, on failure invokes coder fix loop, re-polls.
+
+        Filters CI checks to only block on required=true checks.
+        Optional failing checks log warning only.
+        """
         rounds_used = 0
 
         while rounds_used < self.config.max_ci_fix_rounds:
             result = self.wait_for_completion(pr_number, branch)
 
             if result.passed:
-                return CIResult(passed=True, rounds_used=rounds_used)
+                has_required_failure, failing_required = self._check_required_failures(pr_number)
+                if not has_required_failure:
+                    return CIResult(passed=True, rounds_used=rounds_used)
+                self.logger.warn(
+                    f"CI run passed but required checks still failing: {failing_required}"
+                )
 
             rounds_used += 1
             self.logger.warn(f"CI failed (round {rounds_used}/{self.config.max_ci_fix_rounds})")
@@ -1736,14 +1774,15 @@ class CIPoller:
 
             self.logger.info("Pushing fix and waiting for new run...")
 
+            try:
+                current_run_id = self._get_latest_run_id(branch)
+            except CITimeoutError:
+                current_run_id = ""
+
             branch_manager = BranchManager(self.config.repo_dir, self.runner, self.logger)
             branch_manager.push_branch(branch)
 
-            new_run_id = self._wait_for_new_run(branch, "", timeout=180)
-            conclusion = self._wait_for_run(new_run_id)
-
-            if conclusion == "PASSED":
-                return CIResult(passed=True, rounds_used=rounds_used)
+            self._wait_for_new_run(branch, current_run_id, timeout=180)
 
         self.logger.error(f"CI still failing after {rounds_used} fix rounds")
         raise CIFailedFatal(f"CI still failing after {rounds_used} fix rounds")
