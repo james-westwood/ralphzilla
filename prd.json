@@ -989,7 +989,7 @@
         "Sample progress.txt generated and verified for readability"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [
         "M1-04"
       ],
