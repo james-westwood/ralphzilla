@@ -34,10 +34,10 @@ class TestCLIEntryPoint:
         )
         assert result.returncode == 0
 
-    def test_rzilla_dry_run_exits_zero(self):
-        """rzilla --dry-run should exit 0 against project's prd.json."""
+    def test_rzilla_run_dry_run_exits_zero(self):
+        """rzilla run --dry-run should exit 0 against project's prd.json."""
         result = subprocess.run(
-            ["uv", "run", "rzilla", "--dry-run"],
+            ["uv", "run", "rzilla", "run", "--dry-run"],
             capture_output=True,
             cwd=Path(__file__).parent.parent,
         )
