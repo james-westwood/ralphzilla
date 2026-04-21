@@ -3400,8 +3400,10 @@ class AIRunner:
     def _clean_output(self, text: str) -> str:
         """Strips ANSI escape codes and opencode internal UI lines."""
         text = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", text)
-        text = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", text)
-        text = re.sub(r"\x1b[@-Z\\-_]", "", text)
+        text = re.sub(
+            r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\x5c)", "", text
+        )  # OSC sequences (end with BEL or ESC \)
+        text = re.sub(r"\x1b[@-A-Z\x5c-_]", "", text)  # Fe sequences
 
         ui_prefixes = ("> build", "> session", "> task")
         ui_chars = set("\u2731\u2190\u2192\u2717\u25c7\u25c8\u2713\u25b6\u25c0\u21d2\u2714\u2718")
