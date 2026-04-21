@@ -994,6 +994,121 @@
         "M1-04"
       ],
       "epic": "M2"
+    },
+    {
+      "id": "M4-01",
+      "title": "LoopSupervisor subprocess monitoring",
+      "description": "Implement LoopSupervisor class that runs ralph.py as a subprocess and monitors both exit codes and log output. This is the foundational component of the Scrum Master layer that enables unattended multi-sprint operation. The supervisor must capture stdout/stderr, detect non-zero exits, and parse log files for error markers. It tracks process lifecycle including startup, health checks during execution, and graceful shutdown detection. This component forms the base layer that all subsequent blocker analysis depends on.",
+      "acceptance_criteria": [
+        "tests/test_loop_supervisor.py: test_runs_ralph_as_subprocess_with_correct_args",
+        "tests/test_loop_supervisor.py: test_captures_exit_code_on_completion",
+        "tests/test_loop_supervisor.py: test_monitors_log_file_for_error_markers",
+        "tests/test_loop_supervisor.py: test_detects_hung_process_via_timeout",
+        "ralph.py: LoopSupervisor class implemented with run() method"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [],
+      "epic": "M4"
+    },
+    {
+      "id": "M4-02",
+      "title": "BlockerAnalyser classification engine",
+      "description": "Implement BlockerAnalyser class that classifies ralph.py exit causes into the BlockerKind enum. The analyser must parse subprocess exit codes, log file patterns, and error markers to categorize failures into distinct blocker types: MERGE_CONFLICT, CI_FATAL, PRD_GUARD_VIOLATION, and REVIEWER_UNAVAILABLE. Each classification must include the specific error context and affected task ID for downstream unblock strategies. This enables the Scrum Master to apply targeted recovery tactics rather than generic retry loops.",
+      "acceptance_criteria": [
+        "tests/test_blocker_analyser.py: test_classifies_merge_conflict_from_git_output",
+        "tests/test_blocker_analyser.py: test_classifies_ci_fatal_from_cifailedfatal_exception",
+        "tests/test_blocker_analyser.py: test_classifies_prd_guard_from_prdguardviolation",
+        "tests/test_blocker_analyser.py: test_classifies_reviewer_unavailable_from_empty_response",
+        "ralph.py: BlockerKind enum with all four variants",
+        "ralph.py: BlockerAnalyser class with analyse() method"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [],
+      "epic": "M4"
+    },
+    {
+      "id": "M4-03",
+      "title": "UnblockStrategy per-blocker recovery",
+      "description": "Implement UnblockStrategy class that provides specific recovery tactics for each BlockerKind variant. For MERGE_CONFLICT: abort merge, reset branch, and re-apply changes. For CI_FATAL: create FIX ticket with failure context and skip to next task. For PRD_GUARD_VIOLATION: rollback PR, mark task for human review, create replacement task. For REVIEWER_UNAVAILABLE: switch to alternative reviewer model or enable skip-review mode. Each strategy must log actions taken and return success/failure status for escalation decisions.",
+      "acceptance_criteria": [
+        "tests/test_unblock_strategy.py: test_merge_conflict_strategy_resets_and_reapplies",
+        "tests/test_unblock_strategy.py: test_ci_fatal_creates_fix_ticket_via_backlog_manager",
+        "tests/test_unblock_strategy.py: test_prd_guard_rolls_back_and_escalates",
+        "tests/test_unblock_strategy.py: test_reviewer_unavailable_switches_model",
+        "ralph.py: UnblockStrategy class with execute() method per BlockerKind"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [],
+      "epic": "M4"
+    },
+    {
+      "id": "M4-04",
+      "title": "BacklogManager FIX ticket creation",
+      "description": "Implement BacklogManager class that creates FIX tickets from APPROVED-with-comments PR reviews and manages task backlog integrity. The manager must parse reviewer feedback to generate actionable fix tasks with proper depends_on chains, ensuring fix tasks reference the original task ID. Critical constraint: never modifies in-flight tasks (tasks with active branches or open PRs). Only creates new tasks appended to prd.json via TaskTracker.add_task(). Includes epic inference for FIX tickets and populates acceptance_criteria based on review comments.",
+      "acceptance_criteria": [
+        "tests/test_backlog_manager.py: test_creates_fix_ticket_from_review_comments",
+        "tests/test_backlog_manager.py: test_fix_ticket_has_correct_depends_on_chain",
+        "tests/test_backlog_manager.py: test_never_modifies_in_flight_tasks",
+        "tests/test_backlog_manager.py: test_appends_only_via_task_tracker",
+        "ralph.py: BacklogManager class with create_fix_ticket() method"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [],
+      "epic": "M4"
+    },
+    {
+      "id": "M4-05",
+      "title": "EscalationManager circuit breakers",
+      "description": "Implement EscalationManager class that provides circuit breakers and human escalation paths when ralph is stuck. Tracks consecutive failures per blocker type, triggers escalation after configurable thresholds (3 retries per blocker, 5 total blockers per sprint). Escalation methods include: creating human-owned REVIEW tasks, emitting loud console alerts, and writing escalation-{timestamp}.md with full context. The manager maintains a failure ledger in .ralph/escalations.json for post-mortem analysis. Prevents infinite retry loops that waste compute.",
+      "acceptance_criteria": [
+        "tests/test_escalation_manager.py: test_tracks_consecutive_failures_per_blocker",
+        "tests/test_escalation_manager.py: test_escalates_after_three_retries_same_blocker",
+        "tests/test_escalation_manager.py: test_escalates_after_five_total_blockers",
+        "tests/test_escalation_manager.py: test_writes_escalation_markdown_with_context",
+        "tests/test_escalation_manager.py: test_maintains_failure_ledger_json",
+        "ralph.py: EscalationManager class with should_escalate() and escalate() methods"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [],
+      "epic": "M4"
+    },
+    {
+      "id": "M4-06",
+      "title": "ScrumMaster post-sprint cleanup",
+      "description": "Implement ScrumMaster._post_sprint_cleanup() method that deletes stale ralph branches after a sprint completes. Stale branches are identified as: local branches matching pattern ralph/* that have no open PR, branches whose PR was closed without merge, and branches older than 7 days with no activity. The cleanup uses BranchManager for safe deletion and logs every branch removed. This prevents branch accumulation that slows git operations and pollutes the repo. Cleanup runs automatically after Orchestrator.run() finishes successfully.",
+      "acceptance_criteria": [
+        "tests/test_scrum_master.py: test_identifies_stale_branches_no_open_pr",
+        "tests/test_scrum_master.py: test_deletes_branches_older_than_seven_days",
+        "tests/test_scrum_master.py: test_skips_branches_with_open_prs",
+        "tests/test_scrum_master.py: test_logs_all_deleted_branches",
+        "ralph.py: ScrumMaster class with _post_sprint_cleanup() method"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [],
+      "epic": "M4"
+    },
+    {
+      "id": "M4-07",
+      "title": "ralph scrum CLI command",
+      "description": "Implement the ralph scrum CLI command that runs the full Scrum Master loop. The command instantiates ScrumMaster which orchestrates LoopSupervisor, BlockerAnalyser, UnblockStrategy, BacklogManager, and EscalationManager. The loop runs ralph.py subprocess, monitors for blockers, applies unblock strategies, and escalates when stuck. Supports --max-sprints flag for multi-sprint projects and --resume flag to continue from previous state stored in .ralph/scrum-state.json. This is the entry point for unattended multi-sprint operation that requires no human intervention for recoverable failures.",
+      "acceptance_criteria": [
+        "tests/test_scrum_cli.py: test_scrum_command_instantiates_scrum_master",
+        "tests/test_scrum_cli.py: test_runs_multiple_sprints_with_max_sprints_flag",
+        "tests/test_scrum_cli.py: test_resumes_from_state_file",
+        "tests/test_scrum_cli.py: test_escalation_triggers_human_notification",
+        "ralph.py: ralph scrum click command",
+        "ralph.py: ScrumMaster class with run() method"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [],
+      "epic": "M4"
     }
   ]
 }
