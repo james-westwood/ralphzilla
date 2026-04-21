@@ -1056,7 +1056,7 @@
         "ralph.py: BacklogManager class with create_fix_ticket() method"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [],
       "epic": "M4"
     },
