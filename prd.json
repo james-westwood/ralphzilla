@@ -748,7 +748,7 @@
       "depends_on": [
         "M1-19"
       ],
-      "completed": false,
+      "completed": true,
       "priority": 24
     },
     {
