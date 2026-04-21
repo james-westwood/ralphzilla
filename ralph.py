@@ -756,6 +756,114 @@ class TaskTracker:
         self._save(prd)
 
 
+GITHUB_ISSUE_PATTERN = re.compile(r"github\.com/.+/issues/(\d+)")
+
+
+class PrdGenerator:
+    """
+    Generates tasks from natural language spec or GitHub issue URL.
+    Used by 'ralph add' command.
+    """
+
+    def __init__(
+        self,
+        ai_runner: "AIRunner",
+        task_tracker: TaskTracker,
+        validator: PrdValidator,
+        runner: SubprocessRunner,
+        logger: RalphLogger,
+    ):
+        self.ai_runner = ai_runner
+        self.task_tracker = task_tracker
+        self.validator = validator
+        self.runner = runner
+        self.logger = logger
+
+    def _is_github_issue_url(self, spec: str) -> bool:
+        """Returns True if spec matches GitHub issue URL pattern."""
+        return bool(GITHUB_ISSUE_PATTERN.search(spec))
+
+    def _fetch_issue_body(self, issue_url: str) -> str:
+        """Fetches issue body via gh CLI."""
+        match = GITHUB_ISSUE_PATTERN.search(issue_url)
+        if not match:
+            raise RalphError(f"Could not parse issue number from URL: {issue_url}")
+
+        issue_number = match.group(1)
+        self.logger.info(f"Fetching GitHub issue #{issue_number}...")
+
+        result = self.runner.run(
+            ["gh", "issue", "view", issue_number, "--json", "title,body"],
+            check=True,
+        )
+        data = json.loads(result.stdout)
+
+        title = data.get("title", "")
+        body = data.get("body", "")
+
+        if body:
+            return f"{title}\n\n{body}"
+        return title
+
+    def _infer_next_epic_prefix(self, prd: dict) -> int:
+        """Scans existing task IDs for highest Mx prefix, returns x+1."""
+        max_epic = 0
+        for task in prd.get("tasks", []):
+            tid = task.get("id", "")
+            match = re.match(r"^M(\d+)", tid)
+            if match:
+                num = int(match.group(1))
+                if num > max_epic:
+                    max_epic = num
+        return max_epic + 1
+
+    def generate(self, spec: str) -> list[dict]:
+        """Main entry point: generates tasks from spec or URL."""
+        prd = self.task_tracker.load()
+        existing_tasks = prd.get("tasks", [])
+        all_task_ids = {t["id"] for t in existing_tasks}
+        next_epic = self._infer_next_epic_prefix(prd)
+
+        if self._is_github_issue_url(spec):
+            spec = self._fetch_issue_body(spec)
+            self.logger.info("Fetched issue body, generating tasks...")
+
+        prompt = PromptBuilder.prd_generate_prompt(spec, existing_tasks)
+        output = self.ai_runner.run_reviewer("gemini", prompt)
+
+        try:
+            match = re.search(r"\[\s*{.*}\s*\]", output, re.DOTALL)
+            if match:
+                tasks = json.loads(match.group(0))
+            else:
+                tasks = json.loads(output)
+        except json.JSONDecodeError as e:
+            raise RalphError(f"Failed to parse AI output as JSON: {e}")
+
+        if not isinstance(tasks, list):
+            raise RalphError(f"Expected JSON list, got {type(tasks)}")
+
+        if not tasks:
+            raise RalphError("No tasks generated")
+
+        assigned_count = 0
+        for task in tasks:
+            task["id"] = f"M{next_epic}-{assigned_count + 1:02d}"
+            task["completed"] = False
+            task["owner"] = "ralph"
+            task["epic"] = f"M{next_epic}"
+
+            depends_on = task.get("depends_on", [])
+            task["depends_on"] = [dep for dep in depends_on if dep in all_task_ids]
+
+            self.validator.validate(task, all_task_ids)
+            self.task_tracker.add_task(task)
+            assigned_count += 1
+            self.logger.info(f"Added task: {task['id']} {task.get('title')}")
+
+        return tasks
+
+
 class PlanChecker:
     """
     Validates the plan before the sprint starts.
@@ -1290,6 +1398,42 @@ Output [HOLLOW] <test_name>: <reason> for any issues found.
 
 Output the subtasks as a JSON list of objects with fields:
 title, description, acceptance_criteria, files, owner.
+"""
+
+    @staticmethod
+    def prd_generate_prompt(spec: str, existing_tasks: list[dict]) -> str:
+        max_epic = 0
+        task_ids = []
+        for t in existing_tasks:
+            tid = t.get("id", "")
+            task_ids.append(tid)
+            match = re.match(r"^M(\d+)", tid)
+            if match:
+                num = int(match.group(1))
+                if num > max_epic:
+                    max_epic = num
+
+        task_ids_text = "\n".join(task_ids) if task_ids else "(none)"
+
+        return f"""Generate a list of one or more tasks from the following spec:
+
+{spec}
+
+Existing task IDs: {task_ids_text}
+Max epic prefix found: M{max_epic}
+Next epic prefix should be M{max_epic + 1} for new tasks.
+
+Output a JSON list of task objects with these exact fields:
+- id: string (format: M{{next_num}}-01, M{{next_num}}-02, etc.)
+- title: string (brief, descriptive)
+- description: string (detailed, >= 100 chars, explains what and why)
+- acceptance_criteria: list of strings (each references a file path like tests/ or .py)
+- owner: string ("ralph" - never "human")
+- completed: false
+- depends_on: list of strings (IDs from existing tasks that must complete first, can be empty)
+- epic: string (like "M3" for the next epic)
+
+Output ONLY valid JSON — no explanation, no markdown formatting. Start with [ and end with ].
 """
 
 
@@ -2606,6 +2750,65 @@ exit 0
     print(f"  - {reviewer_instructions_path}")
     print(f"  - {hook_path}")
 
+    return 0
+
+
+@cli.command("add")
+@click.argument("spec")
+@click.option(
+    "--repo-dir",
+    "repo_dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Repo root (default: directory containing ralph.py)",
+)
+def add(
+    spec: str,
+    repo_dir: Path | None,
+) -> int:
+    """Add tasks from a natural language spec or GitHub issue URL.
+
+    SPEC: A natural language description of the task(s) to add, or a
+    GitHub issue URL like https://github.com/user/repo/issues/123
+    """
+    if repo_dir is None:
+        repo_dir = Path(__file__).parent.resolve()
+
+    log_file = repo_dir / LOG_FILE_NAME
+    logger = RalphLogger(log_file)
+    runner = SubprocessRunner(logger)
+
+    task_tracker = TaskTracker(
+        repo_dir / PRD_FILE,
+        repo_dir / PROGRESS_FILE,
+        runner,
+        logger,
+    )
+    validator = PrdValidator()
+
+    config = Config(
+        max_iterations=1,
+        skip_review=False,
+        tdd_mode=False,
+        model_mode="random",
+        opencode_model=DEFAULT_OPENCODE_MODEL,
+        resume=False,
+        repo_dir=repo_dir,
+        log_file=log_file,
+        max_precommit_rounds=DEFAULT_MAX_PRECOMMIT_ROUNDS,
+        max_review_rounds=DEFAULT_MAX_REVIEW_ROUNDS,
+        max_ci_fix_rounds=DEFAULT_MAX_CI_FIX_ROUNDS,
+        max_test_fix_rounds=DEFAULT_MAX_TEST_FIX_ROUNDS,
+        max_test_write_rounds=DEFAULT_MAX_TEST_FIX_ROUNDS,
+        force_task_id=None,
+    )
+    ai_runner = AIRunner(runner, logger, config)
+
+    generator = PrdGenerator(ai_runner, task_tracker, validator, runner, logger)
+
+    tasks = generator.generate(spec)
+
+    print(f"Added {len(tasks)} task(s) to prd.json")
     return 0
 
 
