@@ -1024,7 +1024,7 @@
         "ralph.py: BlockerAnalyser class with analyse() method"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [],
       "epic": "M4"
     },
