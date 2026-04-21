@@ -14,6 +14,7 @@ Run with --help for full option list.
 """
 
 import ast
+import enum
 import json
 import os
 import re
@@ -160,6 +161,20 @@ class AgentSandboxViolation(RalphError):  # noqa: N818
     """Agent attempted an operation outside its sandbox."""
 
     pass
+
+
+class ReviewerUnavailableError(RalphError):
+    """All reviewer agents failed to produce output."""
+
+    pass
+
+
+# --- Blocker Classification ---
+class BlockerKind(enum.Enum):
+    MERGE_CONFLICT = enum.auto()
+    CI_FATAL = enum.auto()
+    PRD_GUARD_VIOLATION = enum.auto()
+    REVIEWER_UNAVAILABLE = enum.auto()
 
 
 # --- Data Classes ---
@@ -1783,6 +1798,115 @@ class PRDGuard:
                 f"PR #{pr_number} violated PRDGuard: prd.json must not be modified by the coder.\n"
                 f"Offending lines:\n{offending}"
             )
+
+
+@dataclass
+class BlockerResult:
+    kind: BlockerKind
+    task_id: str | None
+    context: str
+
+
+class BlockerAnalyser:
+    """
+    Classifies ralph.py exit causes into BlockerKind categories.
+    Parses subprocess exit codes, log file patterns, and error markers
+    to categorize failures: MERGE_CONFLICT, CI_FATAL, PRD_GUARD_VIOLATION,
+    REVIEWER_UNAVAILABLE.
+    """
+
+    MERGE_CONFLICT_PATTERNS = (
+        r"merge.*conflict",
+        r"conflicting files",
+        r"Automatic merge failed",
+        r"CONFLICT",
+    )
+    CI_FATAL_PATTERNS = (
+        r"CI.*failed.*fatal",
+        r"CIFailedFatal",
+        r"ci.*still failing",
+        r"test quality failed",
+    )
+    PRD_GUARD_PATTERNS = (
+        r"PRDGuardViolation",
+        r"prd\.json must not be modified",
+        r"prd\.json.*violated",
+    )
+    REVIEWER_UNAVAILABLE_PATTERNS = (
+        r"Reviewer.*returned no output",
+        r"reviewer.*failed",
+        r"no output from.*reviewer",
+    )
+
+    def __init__(self, logger: RalphLogger | None = None):
+        self.logger = logger
+
+    def analyse(
+        self,
+        exit_code: int,
+        error_output: str = "",
+        task_id: str | None = None,
+    ) -> BlockerResult | None:
+        """
+        Analyse exit code and error output to classify the blocker.
+        Returns BlockerResult with kind, task_id, and context.
+        Returns None if no classifyable blocker found.
+        """
+        output = error_output
+
+        if self._matches_patterns(output, self.MERGE_CONFLICT_PATTERNS):
+            return BlockerResult(
+                kind=BlockerKind.MERGE_CONFLICT,
+                task_id=task_id,
+                context=self._extract_context(output, "merge conflict"),
+            )
+
+        if self._matches_patterns(output, self.CI_FATAL_PATTERNS):
+            return BlockerResult(
+                kind=BlockerKind.CI_FATAL,
+                task_id=task_id,
+                context=self._extract_context(output, "CI fatal"),
+            )
+
+        if self._matches_patterns(output, self.PRD_GUARD_PATTERNS):
+            return BlockerResult(
+                kind=BlockerKind.PRD_GUARD_VIOLATION,
+                task_id=task_id,
+                context=self._extract_context(output, "PRD guard violation"),
+            )
+
+        if self._matches_patterns(output, self.REVIEWER_UNAVAILABLE_PATTERNS):
+            return BlockerResult(
+                kind=BlockerKind.REVIEWER_UNAVAILABLE,
+                task_id=task_id,
+                context=self._extract_context(output, "reviewer unavailable"),
+            )
+
+        if exit_code != 0 and not output:
+            if "CIFailedFatal" in str(task_id or ""):
+                return BlockerResult(
+                    kind=BlockerKind.CI_FATAL,
+                    task_id=task_id,
+                    context="CI failed after max fix rounds",
+                )
+
+        return None
+
+    def _matches_patterns(self, text: str, patterns: tuple) -> bool:
+        """Check if text matches any of the patterns (case-insensitive)."""
+        lower_text = text.lower()
+        for pattern in patterns:
+            if re.search(pattern, lower_text, re.IGNORECASE):
+                return True
+        return False
+
+    def _extract_context(self, output: str, default: str) -> str:
+        """Extract error context from output."""
+        lines = output.splitlines()
+        for line in lines[:5]:
+            if len(line.strip()) > 10:
+                return line.strip()[:200]
+        return default
 
 
 class PromptBuilder:
