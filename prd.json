@@ -1007,7 +1007,7 @@
         "ralph.py: LoopSupervisor class implemented with run() method"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [],
       "epic": "M4"
     },
