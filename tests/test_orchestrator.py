@@ -1,5 +1,5 @@
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 
 import pytest
 
@@ -8,10 +8,13 @@ from ralph import (
     BranchManager,
     BranchStatus,
     BranchSyncError,
+    CIFailedFatal,
+    CITimeoutError,
     Config,
     Orchestrator,
     PlanChecker,
     PlanInvalidError,
+    PRDGuardViolation,
     PreflightError,
     PRInfo,
     RalphLogger,
@@ -284,3 +287,238 @@ class TestRunTaskTdd:
         result = orch._run_task(task, "branch", {})
 
         assert result.fatal is True
+
+
+class TestRunTaskStandardIntegration:
+    """Integration tests verifying correct execution order via call sequence tracking."""
+
+    @pytest.fixture
+    def fully_mocked_orchestrator(self, config, logger):
+        """Create an orchestrator with all components mocked."""
+        orch = Orchestrator(config, logger)
+        orch.branch_manager = MagicMock()
+        orch.ai_runner = MagicMock()
+        orch.precommit_gate = MagicMock()
+        orch.test_runner = MagicMock()
+        orch.pr_manager = MagicMock()
+        orch.ci_poller = MagicMock()
+        orch.prd_guard = MagicMock()
+        orch.review_loop = MagicMock()
+        orch.runner = MagicMock()
+        orch.task_tracker = MagicMock()
+
+        orch.ai_runner.assign_agents.return_value = ("coder", "reviewer", "writer")
+
+        return orch
+
+    def test_standard_mode_calls_components_in_correct_order(self, fully_mocked_orchestrator):
+        """Verify state machine calls components in exact DESIGN.md order."""
+        orch = fully_mocked_orchestrator
+
+        orch.branch_manager.ensure_main_up_to_date.return_value = None
+        orch.branch_manager.checkout_or_create.return_value = BranchStatus(
+            existed=False, had_commits=False
+        )
+        orch.ai_runner.run_coder.return_value = True
+        orch.precommit_gate.run.return_value = MagicMock(passed=True)
+        orch.test_runner.run.return_value = MagicMock(passed=True)
+        orch.branch_manager.push_branch.return_value = None
+        orch.review_loop.run.return_value = MagicMock(verdict="APPROVED", rounds_used=1)
+        orch.ci_poller.wait_and_fix.return_value = MagicMock(passed=True)
+        orch.prd_guard.check.return_value = None
+        orch.pr_manager.merge.return_value = None
+        orch.branch_manager.merge_and_cleanup.return_value = None
+        orch.task_tracker.append_progress.return_value = None
+        orch.task_tracker.mark_complete.return_value = None
+        orch.task_tracker.commit_tracking.return_value = None
+
+        task = {"id": "T-01", "title": "test task"}
+        result = orch._run_task_standard(
+            task, "ralph/branch", {}, "coder", "reviewer", PRInfo(number=1, url="")
+        )
+
+        assert result.fatal is False
+
+        calls = orch.branch_manager.method_calls
+        expected_order = [
+            "ensure_main_up_to_date",
+            "checkout_or_create",
+            "push_branch",
+            "merge_and_cleanup",
+        ]
+        actual_methods = [c[0] for c in calls]
+        for expected in expected_order:
+            assert expected in actual_methods, f"{expected} not called in order"
+
+    def test_branch_sync_error_returns_fatal_task_result(self, fully_mocked_orchestrator):
+        """BranchSyncError → TaskResult(fatal=True)."""
+        orch = fully_mocked_orchestrator
+        orch.branch_manager.ensure_main_up_to_date.side_effect = BranchSyncError("diverged")
+
+        task = {"id": "T-01", "title": "test task"}
+        result = orch._run_task_standard(
+            task, "branch", {}, "coder", "reviewer", PRInfo(number=1, url="")
+        )
+
+        assert result.fatal is True
+        assert "diverged" in result.message
+
+    def test_branch_exists_error_returns_fatal_task_result(self, fully_mocked_orchestrator):
+        """BranchExistsError (no resume) → TaskResult(fatal=True)."""
+        orch = fully_mocked_orchestrator
+        orch.branch_manager.checkout_or_create.side_effect = BranchExistsError("exists")
+
+        task = {"id": "T-01", "title": "test task"}
+        result = orch._run_task_standard(
+            task, "branch", {}, "coder", "reviewer", PRInfo(number=1, url="")
+        )
+
+        assert result.fatal is True
+
+    def test_coder_failed_error_returns_fatal_task_result(self, fully_mocked_orchestrator):
+        """CoderFailedError → TaskResult(fatal=True)."""
+        orch = fully_mocked_orchestrator
+        orch.ai_runner.run_coder.return_value = False
+
+        task = {"id": "T-01", "title": "test task"}
+        result = orch._run_task_standard(
+            task, "branch", {}, "coder", "reviewer", PRInfo(number=1, url="")
+        )
+
+        assert result.fatal is True
+
+    def test_precommit_failure_after_max_rounds_continues(self, fully_mocked_orchestrator):
+        """PreCommitGate failure after max rounds → logs WARN, continues."""
+        orch = fully_mocked_orchestrator
+        orch.precommit_gate.run.return_value = MagicMock(passed=False, rounds_used=2)
+
+        task = {"id": "T-01", "title": "test task"}
+        result = orch._run_task_standard(
+            task, "branch", {}, "coder", "reviewer", PRInfo(number=1, url="")
+        )
+
+        assert result.fatal is False
+
+    def test_testrunner_failure_after_max_rounds_continues(self, fully_mocked_orchestrator):
+        """TestRunner failure after max rounds → logs WARN, continues."""
+        orch = fully_mocked_orchestrator
+        orch.test_runner.run.return_value = MagicMock(passed=False, rounds_used=2)
+
+        task = {"id": "T-01", "title": "test task"}
+        result = orch._run_task_standard(
+            task, "branch", {}, "coder", "reviewer", PRInfo(number=1, url="")
+        )
+
+        assert result.fatal is False
+
+    def test_push_failure_returns_fatal_task_result(self, fully_mocked_orchestrator):
+        """CalledProcessError on push → TaskResult(fatal=True)."""
+        import subprocess
+
+        orch = fully_mocked_orchestrator
+        orch.branch_manager.push_branch.side_effect = subprocess.CalledProcessError(
+            1, ["git", "push"]
+        )
+
+        task = {"id": "T-01", "title": "test task"}
+        result = orch._run_task_standard(
+            task, "branch", {}, "coder", "reviewer", PRInfo(number=1, url="")
+        )
+
+        assert result.fatal is True
+
+    def test_review_max_rounds_exceeded_continues_to_ci(self, fully_mocked_orchestrator):
+        """ReviewLoop max rounds exceeded → logs WARN, continues to CI."""
+        orch = fully_mocked_orchestrator
+        config.skip_review = False
+        orch.review_loop.run.return_value = MagicMock(
+            verdict="CHANGES_REQUESTED_MAX_REACHED", rounds_used=2
+        )
+
+        task = {"id": "T-01", "title": "test task"}
+        result = orch._run_task_standard(
+            task, "branch", {}, "coder", "reviewer", PRInfo(number=1, url="")
+        )
+
+        assert result.fatal is False
+
+    def test_ci_timeout_error_returns_fatal_task_result(self, fully_mocked_orchestrator):
+        """CITimeoutError → TaskResult(fatal=True)."""
+        orch = fully_mocked_orchestrator
+        orch.ci_poller.wait_and_fix.side_effect = CITimeoutError("timeout")
+
+        task = {"id": "T-01", "title": "test task"}
+        result = orch._run_task_standard(
+            task, "branch", {}, "coder", "reviewer", PRInfo(number=1, url="")
+        )
+
+        assert result.fatal is True
+
+    def test_ci_failed_fatal_returns_fatal_task_result(self, fully_mocked_orchestrator):
+        """CIFailedFatal → TaskResult(fatal=True)."""
+        orch = fully_mocked_orchestrator
+        orch.ci_poller.wait_and_fix.side_effect = CIFailedFatal("failed")
+
+        task = {"id": "T-01", "title": "test task"}
+        result = orch._run_task_standard(
+            task, "branch", {}, "coder", "reviewer", PRInfo(number=1, url="")
+        )
+
+        assert result.fatal is True
+
+    def test_prd_guard_violation_closes_pr_and_returns_fatal(self, fully_mocked_orchestrator):
+        """PRDGuardViolation → closes PR, TaskResult(fatal=True)."""
+        orch = fully_mocked_orchestrator
+        orch.prd_guard.check.side_effect = PRDGuardViolation("touched prd")
+
+        task = {"id": "T-01", "title": "test task"}
+        result = orch._run_task_standard(
+            task, "branch", {}, "coder", "reviewer", PRInfo(number=1, url="")
+        )
+
+        assert result.fatal is True
+        orch.pr_manager.close.assert_called_once_with(1, ANY)
+
+    def test_success_calls_tracking_in_order(self, fully_mocked_orchestrator):
+        """On success: calls mark_complete, append_progress, commit_tracking in that order."""
+        orch = fully_mocked_orchestrator
+
+        call_order = []
+
+        def track_append_progress(*args, **kwargs):
+            call_order.append("append_progress")
+
+        def track_mark_complete(*args, **kwargs):
+            call_order.append("mark_complete")
+
+        def track_commit_tracking(*args, **kwargs):
+            call_order.append("commit_tracking")
+
+        orch.task_tracker.append_progress.side_effect = track_append_progress
+        orch.task_tracker.mark_complete.side_effect = track_mark_complete
+        orch.task_tracker.commit_tracking.side_effect = track_commit_tracking
+
+        task = {"id": "T-01", "title": "test task"}
+        result = orch._run_task_standard(
+            task, "branch", {}, "coder", "reviewer", PRInfo(number=1, url="")
+        )
+
+        assert result.fatal is False
+        assert call_order == [
+            "append_progress",
+            "mark_complete",
+            "commit_tracking",
+        ]
+
+    def test_skip_review_skips_review_loop(self, fully_mocked_orchestrator):
+        """When skip_review=True, ReviewLoop.run is not called."""
+        config = fully_mocked_orchestrator.config
+        config.skip_review = True
+
+        task = {"id": "T-01", "title": "test task"}
+        result = fully_mocked_orchestrator._run_task_standard(
+            task, "branch", {}, "coder", "reviewer", PRInfo(number=1, url="")
+        )
+
+        assert result.fatal is False
+        fully_mocked_orchestrator.review_loop.run.assert_not_called()
