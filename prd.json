@@ -969,7 +969,7 @@
         "tests/test_sprint_summary.py: test_summary_file_created_with_correct_name, test_frontmatter_parseable_yaml, test_includes_all_completed_tasks, test_includes_ci_results_per_task, test_includes_escalation_section"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [
         "M1-18c"
       ],
