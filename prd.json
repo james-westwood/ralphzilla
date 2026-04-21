@@ -831,6 +831,169 @@
       ],
       "completed": true,
       "priority": 27
+    },
+    {
+      "id": "M2-01",
+      "title": "unit_tests_task_tracker_plan_checker",
+      "description": "Write comprehensive unit tests for TaskTracker and PlanChecker classes in ralph.py. TaskTracker tests must verify: fresh load behavior (never cached state), get_next_task() filtering by completed=false, owner filtering excluding human tasks, depends_on validation ensuring only completed dependencies are eligible, mark_complete atomicity, and commit_tracking git command sequence. PlanChecker tests must verify: structural validation catching missing fields (title, description, acceptance_criteria), empty AC list detection, unresolved depends_on catching non-existent task IDs, complexity inference scoring based on AC count, word count, file count, and keyword matching. All tests must use tmp_path for filesystem isolation and mock SubprocessRunner to avoid actual git calls.",
+      "acceptance_criteria": [
+        "tests/test_task_tracker.py: test_fresh_load_reads_disk_each_call, test_get_next_task_returns_incomplete_ralph_owned_task, test_get_next_task_skips_human_owned_tasks, test_get_next_task_respects_depends_on_completion, test_mark_complete_writes_back_to_disk, test_commit_tracking_issues_correct_git_commands",
+        "tests/test_plan_checker.py: test_structural_validation_fails_missing_required_field, test_empty_acceptance_criteria_caught, test_unresolved_depends_on_raises_error, test_complexity_inference_scores_1_for_simple_tasks, test_complexity_inference_scores_2_for_moderate_tasks, test_complexity_inference_scores_3_for_complex_tasks",
+        "All tests pass with uv run pytest tests/ -v"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M1-04",
+        "M1-05"
+      ],
+      "epic": "M2"
+    },
+    {
+      "id": "M2-02",
+      "title": "unit_tests_branch_manager_prd_guard",
+      "description": "Write comprehensive unit tests for BranchManager and PRDGuard classes in ralph.py. BranchManager tests must verify: SSH remote enforcement rejecting HTTPS remotes, ensure_main_up_to_date using reset --hard (never pull --ff-only), checkout_or_create raising BranchExistsError when resume=False and branch exists, sanitise_branch_name transforming titles to 40-char hyphenated lowercase, and that verify_ssh_remote() is called before every push operation. PRDGuard tests must verify: detecting any modification to prd.json via diff parsing, catching completed=true changes specifically, and raising PRDGuardViolation with the offending PR number and diff lines. All tests must mock SubprocessRunner and verify exact git command sequences via call inspection.",
+      "acceptance_criteria": [
+        "tests/test_branch_manager.py: test_verify_ssh_remote_raises_on_https_url, test_ensure_main_up_to_date_uses_reset_not_pull, test_checkout_or_create_raises_on_existing_branch_no_resume, test_checkout_or_create_creates_new_branch_when_not_exists, test_sanitise_branch_name_truncates_to_40_chars, test_push_verifies_ssh_before_executing",
+        "tests/test_prd_guard.py: test_empty_prd_diff_passes, test_any_prd_modification_raises_violation, test_completed_true_change_raises_violation, test_violation_includes_pr_number_and_offending_lines",
+        "All tests pass with uv run pytest tests/ -v"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M1-06",
+        "M1-08"
+      ],
+      "epic": "M2"
+    },
+    {
+      "id": "M2-03",
+      "title": "unit_tests_prompt_builder_ci_poller",
+      "description": "Write comprehensive unit tests for PromptBuilder and CIPoller classes in ralph.py. PromptBuilder tests must verify: all methods are @staticmethod with no instance state, coder_prompt includes epic_addenda when task epic matches, reviewer_prompt includes all 6 review categories, test_writer_prompt instructs failing tests only, and decomposition prompt requests JSON list format. CIPoller tests must verify: _get_latest_run_id parses gh CLI JSON output correctly, _wait_for_run polls at CI_POLL_INTERVAL_SECS intervals, _wait_for_new_run detects when a new run ID appears, run-ID pinning prevents stale data race conditions, and conclusion field (not state) is used for pass/fail determination. All tests must mock SubprocessRunner and use controlled timing for poll loops.",
+      "acceptance_criteria": [
+        "tests/test_prompt_builder.py: test_all_methods_are_staticmethods, test_coder_prompt_includes_epic_addenda_when_matching, test_reviewer_prompt_includes_all_six_review_categories, test_test_writer_prompt_demands_failing_tests, test_decompose_prompt_requests_json_list",
+        "tests/test_ci_poller.py: test_get_latest_run_id_parses_gh_json_output, test_wait_for_run_polls_at_configured_interval, test_wait_for_new_run_detects_different_run_id, test_run_id_pinning_avoids_stale_results, test_uses_conclusion_field_not_state_for_verdict",
+        "All tests pass with uv run pytest tests/ -v"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M1-09",
+        "M1-17b"
+      ],
+      "epic": "M2"
+    },
+    {
+      "id": "M2-04",
+      "title": "integration_tests_dry_run_smoke",
+      "description": "Create integration test suite that performs a dry-run smoke test using a fixture prd.json. The test must invoke the full Orchestrator stack with --dry-run flag, verifying that all components initialize correctly, preflight checks pass, task selection identifies the correct next task, and no actual AI calls or git operations occur. The fixture prd.json must contain a representative mix of completed and pending tasks with various dependency chains. The test captures and asserts on dry-run output format, confirming task titles are printed and estimated actions are displayed. This test serves as the primary smoke test for release confidence, catching wiring issues and configuration drift.",
+      "acceptance_criteria": [
+        "tests/integration/test_dry_run_smoke.py: creates fixture prd.json with 5 tasks (2 completed, 3 pending with dependencies), runs Orchestrator with --dry-run, verifies no git commands executed via SubprocessRunner mock, verifies no AI calls made via AIRunner mock, asserts output contains pending task titles, asserts output format matches expected dry-run template",
+        "tests/fixtures/dry_run_prd.json: representative prd.json fixture with mix of completed/pending tasks and dependency chains",
+        "Test runs and passes with uv run pytest tests/integration/test_dry_run_smoke.py -v"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M1-18c"
+      ],
+      "epic": "M2"
+    },
+    {
+      "id": "M2-05",
+      "title": "coverage_threshold_seventy_percent",
+      "description": "Configure pytest-cov to enforce a minimum 70% line coverage threshold matching GSD's quality bar. This requires updating pyproject.toml to add pytest-cov dependency, configuring coverage to measure ralph.py specifically (excluding tests/ directory), and setting fail_under=70 in the coverage report configuration. Run the full test suite to establish baseline coverage, identify any gaps in existing tests, and add minimal tests to reach the threshold. Document the coverage command in quality_checks. The coverage report must generate both terminal output and HTML reports for debugging. This ensures the codebase maintains testability and prevents regression as new features are added.",
+      "acceptance_criteria": [
+        "pyproject.toml: pytest-cov added to dev dependencies, coverage configuration with fail_under=70, source=ralph.py, omit=tests/*",
+        "quality_checks in prd.json updated to include uv run pytest tests/ --cov=ralph.py --cov-report=term-missing --cov-fail-under=70 -v",
+        "Coverage baseline report generated and stored, confirming \u226570% line coverage for ralph.py",
+        "HTML coverage report generated at htmlcov/index.html for debugging uncovered lines",
+        "All existing tests pass with new coverage configuration"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [],
+      "epic": "M2"
+    },
+    {
+      "id": "M2-06",
+      "title": "validate_plan_flag_tier_two_ai",
+      "description": "Implement the --validate-plan CLI flag that triggers PlanChecker Tier 2 AI sanity check using AIRunner. When --validate-plan is passed, the orchestrator must run an enhanced validation before starting the sprint. The AI validator receives all pending tasks via PromptBuilder.plan_check_prompt() and analyzes them for untestable acceptance criteria (vague language like 'works correctly' without measurable outcomes), non-atomic tasks (ACs that imply multiple distinct implementations), and unresolved contradictions between dependent tasks. Warnings are logged but do not block execution. The AI response is parsed for [WARN] task_id: reason lines. This catches planning errors early before ralph invests compute in implementation.",
+      "acceptance_criteria": [
+        "ralph.py: --validate-plan flag added to CLI, mapped to Config.validate_plan: bool field",
+        "PlanChecker.run() accepts ai_check: bool parameter, when True calls AIRunner with plan_check_prompt",
+        "PromptBuilder.plan_check_prompt(tasks: list[dict]) -> str: instructs AI to flag untestable ACs, non-atomic tasks, contradictions using [WARN] task_id: reason format",
+        "Orchestrator._preflight() calls PlanChecker with ai_check=config.validate_plan when flag is set",
+        "Warnings are logged at WARN level but do not raise PlanInvalidError or block execution",
+        "tests/test_validate_plan.py: test_flag_triggers_ai_validation, test_warn_format_parsed_correctly, test_warnings_logged_but_do_not_block, test_no_ai_call_when_flag_false"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M1-05",
+        "M1-09",
+        "M1-10",
+        "M1-18c"
+      ],
+      "epic": "M2"
+    },
+    {
+      "id": "M2-07",
+      "title": "loop_supervisor_clean_exit_verification",
+      "description": "Implement LoopSupervisor class that monitors each sprint run for clean-exit verification. After every Orchestrator.run() completes (whether successful or via stop condition), the supervisor reads ralph.log and cross-checks for CLEAN_EXIT_MARKERS which include: explicit 'Sprint complete' log line, progress.txt update with timestamp, and no unhandled exception traces in the final 50 log lines. If any marker is missing, the supervisor logs a warning with specific missing indicators. The supervisor also maintains a run history in .ralph/run-history.json tracking: run timestamp, tasks completed count, final state (clean/unclean), and any fatal error classification. This provides observability for unattended operation confidence.",
+      "acceptance_criteria": [
+        "ralph.py: LoopSupervisor(logger: RalphLogger, log_path: Path, progress_path: Path) class implemented",
+        "verify_clean_exit() -> CleanExitResult: reads ralph.log final 50 lines, checks for markers: 'Sprint complete', 'progress.txt updated', absence of 'Traceback' or 'Unhandled exception'",
+        "record_run(result: CleanExitResult, tasks_completed: int) appends entry to .ralph/run-history.json with fields: timestamp, tasks_completed, final_state (clean/unclean), fatal_error_type",
+        "Orchestrator.run() calls loop_supervisor.verify_clean_exit() and record_run() before returning",
+        "tests/test_loop_supervisor.py: test_detects_missing_sprint_complete_marker, test_detects_traceback_in_final_lines, test_records_run_history_correctly, test_clean_exit_all_markers_present"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M1-02",
+        "M1-18c"
+      ],
+      "epic": "M2"
+    },
+    {
+      "id": "M2-08",
+      "title": "sprint_summary_report_markdown",
+      "description": "Implement sprint summary report generation in markdown format output at the end of each Orchestrator.run(). The report must be written to ralph-summary-{timestamp}.md in the repo root and include sections: tasks completed (task IDs, titles, PR numbers), CI results per task (passed/failed with retry counts), PR merge status (merged/closed/pending), escalations (fatal errors with error types and task IDs), performance metrics (total runtime, iterations consumed), and a readiness score (percentage of tasks completed without escalation). The markdown must be parseable by the future Scrum Master layer (Milestone 4) using frontmatter YAML delimiters for structured data and a human-readable body. This provides post-sprint visibility for human review and automated tooling consumption.",
+      "acceptance_criteria": [
+        "ralph.py: Orchestrator._generate_sprint_summary() -> str method creates markdown report",
+        "Report includes YAML frontmatter with: sprint_start, sprint_end, tasks_completed_count, total_tasks, fatal_errors_count, readiness_score_percent",
+        "Report body includes sections: Tasks Completed (table with ID, Title, PR, Status), CI Results (per-task pass/fail with rounds used), Escalations (error type, task ID, reason), Performance Metrics (runtime, iterations)",
+        "File written to ralph-summary-{timestamp}.md with ISO8601 timestamp in filename",
+        "Orchestrator.run() calls _generate_sprint_summary() before clean-exit verification",
+        "tests/test_sprint_summary.py: test_summary_file_created_with_correct_name, test_frontmatter_parseable_yaml, test_includes_all_completed_tasks, test_includes_ci_results_per_task, test_includes_escalation_section"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M1-18c"
+      ],
+      "epic": "M2"
+    },
+    {
+      "id": "M2-09",
+      "title": "progress_txt_human_readable_format",
+      "description": "Refactor TaskTracker.append_progress() to write progress.txt in a human-readable format optimized for quick post-sprint review. The new format must use clear visual separators (ASCII table or markdown), include relative timestamps (e.g., '2 hours ago'), group tasks by epic, and show status indicators (\u2713 for completed, \u26a0 for escalated, \u23f8 for pending). Add a header row with sprint metadata (start date, current iteration count). The format must remain machine-parseable for future automation while prioritizing human readability. Update the progress.txt template in DESIGN.md if it differs. This ensures the human operator can quickly assess sprint health without parsing JSON or dense log files.",
+      "acceptance_criteria": [
+        "ralph.py: TaskTracker.append_progress() updated to write markdown-table format with headers: Epic | Task ID | Title | Status | Completed | PR",
+        "Status column uses symbols: \u2713 for completed without escalation, \u26a0 for completed with escalation/retry exhaustion, \u23f8 for in-progress/pending",
+        "Relative timestamps added in Completed column (e.g., '2024-01-15 14:30 (2h ago)')",
+        "Header section includes sprint start date and iteration count",
+        "Visual separator line after every 5 tasks for readability",
+        "tests/test_task_tracker.py updated: test_append_progress_writes_human_readable_format, test_symbols_correct_for_completed_tasks, test_header_includes_sprint_metadata",
+        "Sample progress.txt generated and verified for readability"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M1-04"
+      ],
+      "epic": "M2"
     }
   ]
 }

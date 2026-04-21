@@ -966,6 +966,9 @@ class PrdGenerator:
 
         prompt = PromptBuilder.prd_generate_prompt(spec, existing_tasks)
         output = self.ai_runner.run_reviewer("gemini", prompt)
+        if not output.strip():
+            self.logger.info("Gemini unavailable, falling back to opencode...")
+            output = self.ai_runner.run_reviewer("opencode", prompt)
 
         try:
             match = re.search(r"\[\s*{.*}\s*\]", output, re.DOTALL)
