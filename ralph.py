@@ -564,6 +564,142 @@ class ReviewLoop:
         return ReviewResult(verdict="CHANGES_REQUESTED_MAX_REACHED", rounds_used=rounds_used)
 
 
+PLAN_CONSENSUS_OUTPUT = "ralph-plan.md"
+
+
+class PlanConsensus:
+    """
+    Lightweight Planner + Critic loop (max 3 iterations).
+    Produces a work plan from a brief, iterates with Critic feedback until approval.
+    """
+
+    def __init__(self, ai_runner: "AIRunner", logger: "RalphLogger", config: Config):
+        self.ai_runner = ai_runner
+        self.logger = logger
+        self.config = config
+
+    def run(self, brief: str, max_iterations: int = 3) -> str:
+        """
+        Run Planner-Critic loop.
+        Returns the final plan text.
+        Writes plan to ralph-plan.md in repo root.
+        """
+        feedback = ""
+        iteration = 0
+        final_plan = ""
+        final_verdict = "OKAY"
+
+        for iteration in range(1, max_iterations + 1):
+            self.logger.info(f"PlanConsensus iteration {iteration}/{max_iterations}")
+
+            planner_prompt = PromptBuilder.planner_prompt(brief, feedback)
+            self.logger.info("Invoking Planner agent")
+            plan_output = self.ai_runner.run_reviewer("gemini", planner_prompt)
+
+            if not plan_output:
+                self.logger.error("Planner produced no output")
+                final_plan = plan_output
+                final_verdict = "REJECT"
+                break
+
+            critic_prompt = PromptBuilder.critic_prompt(plan_output)
+            self.logger.info("Invoking Critic agent")
+            critic_output = self.ai_runner.run_reviewer("claude", critic_prompt)
+
+            verdict, reason = self._parse_critic(critic_output)
+
+            if verdict == "OKAY":
+                final_plan = plan_output
+                final_verdict = "OKAY"
+                break
+
+            self.logger.info(f"Critic REJECT: {reason}")
+            feedback = reason
+            final_plan = plan_output
+            final_verdict = "REJECT"
+
+        self.logger.info(f"PlanConsensus complete: iteration {iteration}, verdict {final_verdict}")
+
+        plan_text = self._format_plan(final_plan, iteration, final_verdict)
+        output_path = self.config.repo_dir / PLAN_CONSENSUS_OUTPUT
+        output_path.write_text(plan_text, encoding="utf-8")
+        self.logger.info(f"Plan written to {output_path}")
+
+        return plan_text
+
+    def _parse_critic(self, output: str) -> tuple[str, str]:
+        """
+        Parse critic output.
+        REJECT takes precedence if both strings appear.
+        Unclear verdict treated as OKAY with warning logged.
+        """
+        reject_match = re.search(r"REJECT", output, re.IGNORECASE)
+        ok_match = re.search(r"OKAY", output, re.IGNORECASE)
+
+        if reject_match:
+            reason = output[reject_match.end() :].strip()
+            if not reason:
+                reason = "unspecified issues"
+            return "REJECT", reason
+
+        if ok_match:
+            return "OKAY", ""
+
+        self.logger.warn("Critic verdict unclear — treating as OKAY")
+        return "OKAY", ""
+
+    def _format_plan(self, plan_json: str, iterations: int, verdict: str) -> str:
+        """Format the plan as markdown with metadata header."""
+        timestamp = datetime.now().isoformat()
+        header = f"""# Work Plan
+
+- **Generated**: {timestamp}
+- **Iterations**: {iterations}
+- **Verdict**: {verdict}
+
+---
+
+"""
+        try:
+            tasks = json.loads(plan_json)
+            if isinstance(tasks, list):
+                body = self._render_markdown_tasks(tasks)
+            else:
+                body = plan_json
+        except json.JSONDecodeError:
+            body = plan_json
+
+        return header + body
+
+    def _render_markdown_tasks(self, tasks: list[dict]) -> str:
+        """Render tasks as markdown list."""
+        lines = []
+        for i, task in enumerate(tasks, 1):
+            title = task.get("title", "Untitled")
+            desc = task.get("description", "")
+            acs = task.get("acceptance_criteria", [])
+            owner = task.get("owner", "ralph")
+            deps = task.get("depends_on", [])
+
+            lines.append(f"### {i}. {title}")
+            lines.append("")
+            lines.append(f"**Owner**: {owner}")
+            if deps:
+                lines.append(f"**Depends on**: {', '.join(deps)}")
+            lines.append("")
+            lines.append(desc)
+            lines.append("")
+            if acs:
+                lines.append("**Acceptance Criteria**:")
+                for ac in acs:
+                    lines.append(f"- {ac}")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+        return "\n".join(lines)
+
+
 class RalphLogger:
     """
     Dual-stream logger that writes to stdout and a log file simultaneously.
@@ -1398,6 +1534,64 @@ Output [HOLLOW] <test_name>: <reason> for any issues found.
 
 Output the subtasks as a JSON list of objects with fields:
 title, description, acceptance_criteria, files, owner.
+"""
+
+    @staticmethod
+    def planner_prompt(brief: str, feedback: str = "") -> str:
+        feedback_section = ""
+        if feedback:
+            feedback_section = f"""
+## Prior Critic Feedback (address in your revised plan):
+{feedback}
+
+"""
+        return f"""You are a software architectural planner.
+Your task is to produce a detailed work plan from the following brief:
+
+{brief}
+
+{feedback_section}The plan should include:
+- A clear list of tasks to implement
+- Each task should have: title, description, acceptance criteria
+- Acceptance criteria must be measurable and testable
+- Tasks must be atomic (one deliverable per task)
+- Avoid vague language like "improve", "enhance", "refactor", "fix" without specific outcomes
+
+Output the plan as a JSON list of task objects with these fields:
+- title: string
+- description: string (detailed, explains what and why)
+- acceptance_criteria: list of strings (each testable/measurable)
+- owner: string ("ralph" or "human")
+- depends_on: list of task IDs (can be empty)
+
+Output ONLY valid JSON — no explanation, no markdown. Start with [ and end with ]."""
+
+    @staticmethod
+    def critic_prompt(plan: str) -> str:
+        return f"""You are a plan quality critic.
+Review the following work plan for quality gates:
+
+{plan}
+
+Evaluate against these criteria:
+1. **Measurable ACs** — each task's acceptance criteria must be testable/verifiable
+2. **Atomic tasks** — each task has one distinct deliverable
+3. **No vague language** — flag any vague verbs without specific outcomes:
+   - "improve" → needs specific outcome metric
+   - "enhance" → needs specific feature added
+   - "refactor" → needs specific structure result
+   - "fix" → needs specific bug identifier
+   - "optimize" → needs specific performance metric
+4. **Clear dependencies** — tasks that depend on each other are properly linked
+
+Output exactly:
+- OKAY if the plan passes all gates
+- REJECT with specific line-level feedback for any violations
+
+Format for REJECT:
+REJECT
+- Task N: <specific issue>
+- Task M: <specific issue>
 """
 
     @staticmethod
@@ -2809,6 +3003,71 @@ def add(
     tasks = generator.generate(spec)
 
     print(f"Added {len(tasks)} task(s) to prd.json")
+    return 0
+
+
+@cli.command("plan")
+@click.option(
+    "--brief",
+    "brief",
+    default=None,
+    help="Plan brief (or reads from stdin if omitted)",
+)
+@click.option(
+    "--repo-dir",
+    "repo_dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Repo root (default: directory containing ralph.py)",
+)
+@click.option(
+    "--max-iterations",
+    "max_iterations",
+    default=3,
+    help="Max Planner-Critic iterations (default: 3)",
+)
+def plan(brief: str | None, repo_dir: Path | None, max_iterations: int) -> int:
+    """Generate a work plan from a brief using Planner-Critic loop.
+
+    BRIEF: Optional brief text (or reads from stdin if --brief is omitted).
+    """
+    if repo_dir is None:
+        repo_dir = Path(__file__).parent.resolve()
+
+    if brief is None:
+        brief = sys.stdin.read().strip()
+
+    if not brief:
+        print("Error: --brief required or stdin must contain brief text", file=sys.stderr)
+        return 1
+
+    log_file = repo_dir / LOG_FILE_NAME
+    logger = RalphLogger(log_file)
+    runner = SubprocessRunner(logger)
+
+    config = Config(
+        max_iterations=1,
+        skip_review=False,
+        tdd_mode=False,
+        model_mode="random",
+        opencode_model=DEFAULT_OPENCODE_MODEL,
+        resume=False,
+        repo_dir=repo_dir,
+        log_file=log_file,
+        max_precommit_rounds=DEFAULT_MAX_PRECOMMIT_ROUNDS,
+        max_review_rounds=DEFAULT_MAX_REVIEW_ROUNDS,
+        max_ci_fix_rounds=DEFAULT_MAX_CI_FIX_ROUNDS,
+        max_test_fix_rounds=DEFAULT_MAX_TEST_FIX_ROUNDS,
+        max_test_write_rounds=DEFAULT_MAX_TEST_FIX_ROUNDS,
+        force_task_id=None,
+    )
+    ai_runner = AIRunner(runner, logger, config)
+    consensus = PlanConsensus(ai_runner, logger, config)
+
+    consensus.run(brief, max_iterations)
+
+    output_path = repo_dir / PLAN_CONSENSUS_OUTPUT
+    print(str(output_path))
     return 0
 
 
