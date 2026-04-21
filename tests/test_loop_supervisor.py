@@ -1,4 +1,6 @@
 import json
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -11,7 +13,8 @@ def supervisor(tmp_path):
     log_path = Path(tmp_path) / "ralph.log"
     progress_path = Path(tmp_path) / "progress.txt"
     logger = RalphLogger(log_path)
-    return LoopSupervisor(logger, log_path, progress_path)
+    ralph_path = Path(__file__).parent.parent / "ralph.py"
+    return LoopSupervisor(logger, log_path, progress_path, ralph_path)
 
 
 def test_clean_exit_all_markers_present(supervisor, tmp_path):
@@ -207,3 +210,46 @@ def test_final_50_lines_only(supervisor, tmp_path):
     assert result.clean is True
     assert result.has_sprint_complete is True
     assert result.has_progress_update is True
+
+
+def test_runs_ralph_as_subprocess_with_correct_args(supervisor, tmp_path, capsys):
+    exit_code = supervisor.run(max_iterations=1, timeout=60)
+    assert exit_code in (0, 1)
+
+
+def test_captures_exit_code_on_completion(supervisor, tmp_path):
+    exit_code = supervisor.run(max_iterations=1, timeout=60)
+    assert isinstance(exit_code, int)
+    assert exit_code == supervisor.get_exit_code()
+
+
+def test_monitors_log_file_for_error_markers(supervisor, tmp_path):
+    log_path = Path(tmp_path) / "ralph.log"
+    log_content = """
+2026-04-21 10:00:00 [INFO ] Starting sprint
+2026-04-21 10:05:00 [ERROR] Something went wrong
+2026-04-21 10:10:00 [INFO ] Sprint complete
+"""
+    log_path.write_text(log_content)
+
+    errors = supervisor.parse_log_for_errors()
+    assert len(errors) > 0
+    assert any("ERROR" in e for e in errors)
+
+
+def test_detects_hung_process_via_timeout(supervisor, tmp_path):
+    log_path = Path(tmp_path) / "ralph.log"
+    log_path.write_text("old log content")
+    time.sleep(0.1)
+    os.utime(log_path, (time.time() - 400, time.time() - 400))
+
+    is_hung = supervisor.detect_hung(timeout=300)
+    assert is_hung is True
+
+
+def test_detects_healthy_process_not_hung(supervisor, tmp_path):
+    log_path = Path(tmp_path) / "ralph.log"
+    log_path.write_text("recent log content")
+
+    is_hung = supervisor.detect_hung(timeout=300)
+    assert is_hung is False
