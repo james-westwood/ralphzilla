@@ -126,6 +126,12 @@ class PlanInvalidError(RalphError):
     pass
 
 
+class WaveConflictError(RalphError):
+    """A wave contains tasks that share files — would cause a race condition."""
+
+    pass
+
+
 class PrdValidator:
     """Shared validation layer for prd.json tasks.
 
@@ -382,6 +388,61 @@ class ExecutionReport:
     tasks_blocked: list[str] = field(default_factory=list)  # IDs skipped due to failed deps
 
 
+@dataclass
+class ConflictReport:
+    """Result of a pre-wave file-overlap conflict check."""
+
+    has_conflicts: bool
+    conflicting_tasks: list[tuple[str, str]]  # pairs of task IDs that share a file
+    shared_files: dict[str, list[str]]  # file path -> list of task IDs that claim it
+
+
+class ConflictDetector:
+    """Detects file-overlap conflicts between tasks that would run in the same wave.
+
+    Two tasks conflict when they both list the same path in their ``files`` field.
+    Running them concurrently risks race conditions where both agents modify the
+    same file simultaneously.
+    """
+
+    def check_wave_conflicts(self, tasks: list[dict]) -> ConflictReport:
+        """Analyse *tasks* for file-path overlaps.
+
+        Args:
+            tasks: List of task dicts, each optionally containing a ``files``
+                   key with a list of file paths.
+
+        Returns:
+            A :class:`ConflictReport` describing any overlaps found.
+        """
+        # Build a map: file_path -> [task_ids that claim it]
+        file_to_tasks: dict[str, list[str]] = {}
+        for task in tasks:
+            task_id = task["id"]
+            for path in task.get("files", []):
+                file_to_tasks.setdefault(path, []).append(task_id)
+
+        # Keep only files claimed by more than one task
+        shared_files = {p: ids for p, ids in file_to_tasks.items() if len(ids) > 1}
+
+        # Collect unique conflicting pairs (ordered so tests are deterministic)
+        seen: set[tuple[str, str]] = set()
+        conflicting_tasks: list[tuple[str, str]] = []
+        for ids in shared_files.values():
+            for i in range(len(ids)):
+                for j in range(i + 1, len(ids)):
+                    pair = (ids[i], ids[j])
+                    if pair not in seen:
+                        seen.add(pair)
+                        conflicting_tasks.append(pair)
+
+        return ConflictReport(
+            has_conflicts=bool(shared_files),
+            conflicting_tasks=conflicting_tasks,
+            shared_files=shared_files,
+        )
+
+
 class WaveExecutor:
     """Executes tasks in dependency-ordered waves with asyncio concurrency.
 
@@ -407,6 +468,7 @@ class WaveExecutor:
         self._graph.build_graph(tasks)
         self._task_runner: Callable[[str], TaskResult] = task_runner or self._default_runner
         self._max_workers: int = max_workers or os.cpu_count() or 4
+        self._conflict_detector = ConflictDetector()
 
     # ------------------------------------------------------------------
     # Public API
@@ -419,6 +481,9 @@ class WaveExecutor:
         contains tasks whose dependencies are all satisfied by waves < N.
         Dependencies on task IDs *outside* task_ids are treated as already
         satisfied (completed externally).
+
+        Within each dependency wave, tasks that share files are split into
+        separate sub-waves to prevent parallel file-modification race conditions.
         """
         task_id_set = set(task_ids)
         completed: set[str] = set()
@@ -437,19 +502,66 @@ class WaveExecutor:
             if not ready:
                 # Unresolvable subset (cycle or missing deps) — emit as a
                 # final wave so callers get all task IDs back.
-                waves.append(sorted(remaining))
+                waves.extend(self._split_conflicting([tid for tid in sorted(remaining)]))
                 break
-            waves.append(ready)
+            waves.extend(self._split_conflicting(ready))
             completed.update(ready)
             remaining = [tid for tid in remaining if tid not in set(ready)]
 
         return waves
 
+    def _split_conflicting(self, task_ids: list[str]) -> list[list[str]]:
+        """Split *task_ids* into sub-waves so no two conflicting tasks share a wave.
+
+        Uses a greedy graph-colouring approach: assign each task (in sorted
+        order) to the first existing sub-wave that contains none of its
+        conflicting peers.  Returns a list of sub-waves (each a sorted list).
+        """
+        tasks = [self._tasks[tid] for tid in task_ids if tid in self._tasks]
+        # Include tasks not in self._tasks (e.g. external deps) as file-less stubs
+        task_map = {tid: self._tasks.get(tid, {"id": tid}) for tid in task_ids}
+        tasks = [task_map[tid] for tid in task_ids]
+
+        report = self._conflict_detector.check_wave_conflicts(tasks)
+        if not report.has_conflicts:
+            return [task_ids]
+
+        # Build adjacency set: task_id -> set of task_ids it conflicts with
+        conflicts: dict[str, set[str]] = {tid: set() for tid in task_ids}
+        for a, b in report.conflicting_tasks:
+            conflicts[a].add(b)
+            conflicts[b].add(a)
+
+        sub_waves: list[list[str]] = []
+        for tid in task_ids:
+            placed = False
+            for sub_wave in sub_waves:
+                if not any(peer in conflicts[tid] for peer in sub_wave):
+                    sub_wave.append(tid)
+                    placed = True
+                    break
+            if not placed:
+                sub_waves.append([tid])
+
+        return sub_waves
+
     def execute_wave(self, wave: list[str]) -> dict[str, TaskResult]:
         """Run all tasks in *wave* concurrently and return their results.
 
         Uses asyncio.gather() with a semaphore capped at max_workers.
+
+        Raises:
+            WaveConflictError: if any two tasks in *wave* share a file path,
+                which would risk a parallel file-modification race condition.
         """
+        wave_tasks = [self._tasks[tid] for tid in wave if tid in self._tasks]
+        report = self._conflict_detector.check_wave_conflicts(wave_tasks)
+        if report.has_conflicts:
+            pairs = ", ".join(f"({a}, {b})" for a, b in report.conflicting_tasks)
+            raise WaveConflictError(
+                f"wave contains tasks with overlapping files — would cause race conditions. "
+                f"Conflicting pairs: {pairs}"
+            )
         return asyncio.run(self._execute_wave_async(wave))
 
     def run_parallel(self, tasks: list[dict]) -> ExecutionReport:
