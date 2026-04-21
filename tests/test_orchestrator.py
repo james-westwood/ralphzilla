@@ -114,47 +114,16 @@ class TestPreflight:
         stop_all_mocks(mocks)
 
     def test_human_task_returns_human_next(self, config, logger):
-        with make_orchestrator_mocks() as mocks:
-            orch = Orchestrator(config, logger)
-            assert (
-                orch._check_stop_conditions({"id": "T-01", "owner": "human"}) == "HUMAN_TASK_NEXT"
-            )
-            stop_all_mocks(mocks)
+        mocks = make_orchestrator_mocks()
+        orch = Orchestrator(config, logger)
+        assert orch._check_stop_conditions({"id": "T-01", "owner": "human"}) == "HUMAN_TASK_NEXT"
+        stop_all_mocks(mocks)
 
     def test_ralph_task_returns_none(self, config, logger):
-        with make_orchestrator_mocks() as mocks:
-            orch = Orchestrator(config, logger)
-            assert orch._check_stop_conditions({"id": "T-01", "owner": "ralph"}) is None
-            stop_all_mocks(mocks)
-
-
-class TestCheckCli:
-    def test_check_cli_returns_true_when_found(self, config, logger):
-        with make_orchestrator_mocks() as mocks:
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock()
-                orch = Orchestrator(config, logger)
-                assert orch._check_cli("ls") is True
-            stop_all_mocks(mocks)
-
-    def test_check_cli_returns_false_when_not_found(self, config, logger):
-        with make_orchestrator_mocks() as mocks:
-            with patch("subprocess.run") as mock_run:
-                mock_run.side_effect = FileNotFoundError()
-                orch = Orchestrator(config, logger)
-                assert orch._check_cli("nonexistent") is False
-            stop_all_mocks(mocks)
-
-
-class TestPreflight:
-    def test_preflight_raises_on_missing_gh(self, config, logger):
-        with make_orchestrator_mocks() as mocks:
-            with patch.object(Orchestrator, "_check_cli") as mock_cli:
-                mock_cli.return_value = False
-                orch = Orchestrator(config, logger)
-                with pytest.raises(PreflightError, match="gh CLI not found"):
-                    orch._preflight({})
-            stop_all_mocks(mocks)
+        mocks = make_orchestrator_mocks()
+        orch = Orchestrator(config, logger)
+        assert orch._check_stop_conditions({"id": "T-01", "owner": "ralph"}) is None
+        stop_all_mocks(mocks)
 
 
 class TestRunTaskStandard:

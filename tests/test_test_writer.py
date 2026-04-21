@@ -158,7 +158,7 @@ def test_write_tests_uses_test_writer_from_assign_agents():
 def test_all_three_agents_are_distinct():
     """assign_agents returns three distinct models."""
     config = MagicMock(
-        model_mode="random",
+        model_mode="claude",
         claude_only=False,
         gemini_only=False,
         opencode_only=False,

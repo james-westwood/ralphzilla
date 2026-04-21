@@ -1156,8 +1156,10 @@ class AIRunner:
             return "opencode", "gemini", "claude"
         elif complexity == 2:
             return "gemini", "claude", "opencode"
-        else:
+        elif complexity >= 3:
             return "claude", "gemini", "opencode"
+
+        return "opencode", "gemini", "claude"
 
     def _clean_output(self, text: str) -> str:
         """Strips ANSI escape codes and opencode internal UI lines."""
