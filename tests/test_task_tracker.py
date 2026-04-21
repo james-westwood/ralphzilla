@@ -1,5 +1,6 @@
 import json
-from unittest.mock import MagicMock
+from datetime import datetime
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -251,3 +252,54 @@ def test_mark_decomposed(tmp_path):
 
     tracker.mark_decomposed("T1")
     assert tracker.load()["tasks"][0]["decomposed"] is True
+
+
+class TestRelativeTime:
+    def _tracker(self, tmp_path):
+        prd_file = tmp_path / "prd.json"
+        prd_file.write_text('{"tasks": []}')
+        return TaskTracker(prd_file, tmp_path / "progress.txt", MagicMock(), MagicMock())
+
+    def test_minutes_ago(self, tmp_path):
+        tracker = self._tracker(tmp_path)
+        now = datetime(2026, 4, 21, 12, 0, 0)
+        ts = "2026-04-21"
+        with patch("ralph.datetime") as mock_dt:
+            mock_dt.strptime.side_effect = lambda *a, **kw: datetime.strptime(*a, **kw)
+            mock_dt.now.return_value = now
+            result = tracker._relative_time(ts)
+        assert result.endswith("m ago") or result.endswith("h ago")
+
+    def test_hours_ago(self, tmp_path):
+        tracker = self._tracker(tmp_path)
+        now = datetime(2026, 4, 21, 14, 0, 0)
+        ts = "2026-04-21"
+        with patch("ralph.datetime") as mock_dt:
+            mock_dt.strptime.side_effect = lambda *a, **kw: datetime.strptime(*a, **kw)
+            mock_dt.now.return_value = now
+            result = tracker._relative_time(ts)
+        assert result == "14h ago"
+
+    def test_one_day_ago(self, tmp_path):
+        tracker = self._tracker(tmp_path)
+        now = datetime(2026, 4, 22, 10, 0, 0)
+        ts = "2026-04-21"
+        with patch("ralph.datetime") as mock_dt:
+            mock_dt.strptime.side_effect = lambda *a, **kw: datetime.strptime(*a, **kw)
+            mock_dt.now.return_value = now
+            result = tracker._relative_time(ts)
+        assert result == "1d ago"
+
+    def test_days_ago(self, tmp_path):
+        tracker = self._tracker(tmp_path)
+        now = datetime(2026, 4, 25, 10, 0, 0)
+        ts = "2026-04-21"
+        with patch("ralph.datetime") as mock_dt:
+            mock_dt.strptime.side_effect = lambda *a, **kw: datetime.strptime(*a, **kw)
+            mock_dt.now.return_value = now
+            result = tracker._relative_time(ts)
+        assert result == "4d ago"
+
+    def test_invalid_timestamp_returns_unknown(self, tmp_path):
+        tracker = self._tracker(tmp_path)
+        assert tracker._relative_time("not-a-date") == "unknown"
