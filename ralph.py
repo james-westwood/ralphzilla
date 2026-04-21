@@ -115,6 +115,43 @@ class PlanInvalidError(RalphError):
     pass
 
 
+class PrdValidator:
+    """Shared validation layer for prd.json tasks.
+
+    Enforces 4 rules:
+    1. description >= 100 chars
+    2. At least one AC references a file path pattern
+    3. No credential strings in ralph-owned tasks
+    4. All depends_on IDs exist in all_task_ids
+    """
+
+    FILE_PATH_PATTERN = re.compile(r"[\w/]+\.py|tests/")
+    CREDENTIAL_PATTERN = re.compile(r"(?i)(password|secret|api.?key|token)")
+
+    def validate(self, task: dict, all_task_ids: set[str]) -> None:
+        task_id = task.get("id", "UNKNOWN")
+
+        description = task.get("description", "")
+        if len(description) < 100:
+            raise PlanInvalidError(f"{task_id}: description too short (< 100 chars)")
+
+        acs = task.get("acceptance_criteria", [])
+        has_file_ref = any(self.FILE_PATH_PATTERN.search(str(ac)) for ac in acs)
+        if not has_file_ref:
+            raise PlanInvalidError(
+                f"{task_id}: no acceptance criterion contains a file path pattern"
+            )
+
+        owner = task.get("owner", "")
+        if owner == "ralph":
+            if self.CREDENTIAL_PATTERN.search(description):
+                raise PlanInvalidError(f"{task_id}: description contains credential string")
+
+        for dep_id in task.get("depends_on", []):
+            if dep_id not in all_task_ids:
+                raise PlanInvalidError(f"{task_id}: depends_on unknown task '{dep_id}'")
+
+
 class AgentSandboxViolation(RalphError):  # noqa: N818
     """Agent attempted an operation outside its sandbox."""
 
@@ -725,10 +762,17 @@ class PlanChecker:
     Structural validation, complexity inference, and auto-decomposition.
     """
 
-    def __init__(self, task_tracker: TaskTracker, ai_runner, logger: RalphLogger):
+    def __init__(
+        self,
+        task_tracker: TaskTracker,
+        ai_runner,
+        logger: RalphLogger,
+        validator: PrdValidator | None = None,
+    ):
         self.task_tracker = task_tracker
         self.ai_runner = ai_runner
         self.logger = logger
+        self.validator = validator or PrdValidator()
 
     def check_structural(self, prd: dict) -> list[str]:
         """Validates required fields, non-empty ACs, and resolved dependencies."""
@@ -764,6 +808,11 @@ class PlanChecker:
                     errors.append(f"{task_id}: depends_on unknown task '{dep}'")
                 elif dep not in completed_ids:
                     errors.append(f"{task_id}: depends_on incomplete task '{dep}'")
+
+            try:
+                self.validator.validate(task, all_ids)
+            except PlanInvalidError as e:
+                errors.append(str(e))
 
         return errors
 
