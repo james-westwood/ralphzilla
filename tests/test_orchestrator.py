@@ -249,6 +249,7 @@ class TestRunTaskTdd:
         orch.prd_guard = MagicMock()
         orch.runner = MagicMock()
         orch.task_tracker = MagicMock()
+        orch.review_loop = MagicMock()
 
         orch.test_writer.write_tests.return_value = Path("tests/test_task.py")
         orch.test_quality_checker.run.return_value = MagicMock(passed=True)
