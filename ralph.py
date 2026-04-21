@@ -988,8 +988,13 @@ class TaskTracker:
         prd = self.load()
         return prd.get("quality_checks", [])
 
-    def mark_complete(self, task_id: str) -> None:
-        """Fresh load, sets completed=true, writes back."""
+    def mark_complete(
+        self,
+        task_id: str,
+        completed_at: str | None = None,
+        pr_number: int | None = None,
+    ) -> None:
+        """Fresh load, sets completed=true, completed_at timestamp, pr_number, writes back."""
         prd = self.load()
         found = False
         for task in prd.get("tasks", []):
@@ -999,17 +1004,137 @@ class TaskTracker:
                         f"task {task_id} already marked complete — possible bulk-marking attack"
                     )
                 task["completed"] = True
+                if completed_at:
+                    task["completed_at"] = completed_at
+                if pr_number:
+                    task["pr_number"] = pr_number
                 found = True
                 break
         if not found:
             raise PRDGuardViolation(f"task {task_id} not found")
         self._save(prd)
 
-    def append_progress(self, task_id: str, title: str, pr_number: int, today: str) -> None:
-        """Appends a formatted line to progress.txt."""
-        line = f"{today} | {task_id} | {title} | PR #{pr_number}\n"
-        with open(self.progress_path, "a", encoding="utf-8") as f:
-            f.write(line)
+    def append_progress(
+        self,
+        task_id: str,
+        title: str,
+        pr_number: int,
+        today: str,
+        sprint_start_date: str | None = None,
+        iteration_count: int = 0,
+    ) -> None:
+        """Writes progress.txt in human-readable markdown table format.
+
+        The format includes:
+        - Header with sprint metadata (start date, iteration count)
+        - Markdown table with columns: Epic | Task ID | Title | Status | Completed | PR
+        - Status symbols: ✓ (completed), ⚠ (escalated), ⏸ (pending)
+        - Relative timestamps (e.g., "2h ago")
+        - Visual separator line after every 5 tasks
+        """
+        prd = self.load()
+        tasks = prd.get("tasks", [])
+        completed_tasks = [t for t in tasks if t.get("completed")]
+        pending_tasks = [t for t in tasks if not t.get("completed")]
+
+        lines: list[str] = []
+
+        header_lines = [
+            "# Sprint Progress",
+            "",
+        ]
+        if sprint_start_date:
+            header_lines.append(f"**Sprint Start**: {sprint_start_date}")
+        header_lines.append(f"**Iteration**: {iteration_count}")
+        header_lines.extend(["", "---", ""])
+        lines.extend(header_lines)
+
+        table_header = "| Epic | Task ID | Title | Status | Completed | PR |"
+        table_sep = "|------|---------|-------|--------|-----------|----|"
+        lines.extend([table_header, table_sep])
+
+        all_tasks = list(completed_tasks)
+        for task in pending_tasks:
+            if task.get("owner") != "human":
+                all_tasks.append(task)
+
+        epics: dict[str, list[dict]] = {}
+        for task in all_tasks:
+            epic = task.get("epic", "UNK")
+            epics.setdefault(epic, []).append(task)
+
+        for epic in sorted(epics.keys()):
+            epic_tasks = epics[epic]
+            for i, task in enumerate(epic_tasks):
+                status_symbol = "⏸"
+                completed_str = "-"
+                pr_str = "-"
+
+                if task.get("completed"):
+                    completed_time = task.get("completed_at") or today
+                    relative = self._relative_time(completed_time)
+                    completed_str = f"{completed_time} ({relative})"
+
+                    if task.get("escalated") or task.get("retry_exhausted"):
+                        status_symbol = "⚠"
+                    else:
+                        status_symbol = "✓"
+
+                    pr_num = task.get("pr_number")
+                    if task.get("id") == task_id and pr_number:
+                        pr_num = pr_number
+                    if pr_num:
+                        pr_str = f"#{pr_num}"
+                else:
+                    status_symbol = "⏸"
+
+                task_id_cell = task.get("id", "")
+                title_cell = task.get("title", "")
+
+                row = (
+                    f"| {epic} | {task_id_cell} | {title_cell} | "
+                    f"{status_symbol} | {completed_str} | {pr_str} |"
+                )
+                lines.append(row)
+
+                if (i + 1) % 5 == 0 and i < len(epic_tasks) - 1:
+                    lines.append("|------|------|------|------|------|------|")
+
+        lines.append("")
+        content = "\n".join(lines)
+
+        with open(self.progress_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+    def _relative_time(self, timestamp: str) -> str:
+        """Calculates relative time from a timestamp like '2026-04-21'."""
+        try:
+            dt = datetime.strptime(timestamp, "%Y-%m-%d")
+        except ValueError:
+            return "unknown"
+
+        now = datetime.now()
+        delta = now - dt
+
+        if delta.days == 0:
+            hours = delta.seconds // 3600
+            if hours == 0:
+                mins = delta.seconds // 60
+                return f"{mins}m ago"
+            return f"{hours}h ago"
+        elif delta.days == 1:
+            return "1d ago"
+        elif delta.days < 7:
+            return f"{delta.days}d ago"
+        elif delta.days < 30:
+            weeks = delta.days // 7
+            return f"{weeks}w ago"
+        elif delta.days < 365:
+            months = delta.days // 30
+            return f"{months}mo ago"
+        else:
+            years = delta.days // 365
+            return f"{years}y ago"
 
     def commit_tracking(self, task_id: str, title: str) -> None:
         """git add, commit, push for tracking files."""
@@ -2815,9 +2940,14 @@ class Orchestrator:
             "[_run_task_standard] Step 12: mark_complete → append_progress → commit_tracking"
         )
         now = datetime.now().strftime("%Y-%m-%d")
-        self.task_tracker.append_progress(task["id"], task["title"], pr_info.number, now)
+        sprint_start = (
+            self._sprint_start_time.strftime("%Y-%m-%d") if self._sprint_start_time else None
+        )
+        self.task_tracker.append_progress(
+            task["id"], task["title"], pr_info.number, now, sprint_start, self._iterations_consumed
+        )
         self.logger.info("progress.txt updated")
-        self.task_tracker.mark_complete(task["id"])
+        self.task_tracker.mark_complete(task["id"], now, pr_info.number)
 
         try:
             self.task_tracker.commit_tracking(task["id"], task["title"])
