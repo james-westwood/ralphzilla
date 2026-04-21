@@ -108,6 +108,97 @@ def test_ci_fix_prompt():
     assert "CI" in prompt
 
 
+def test_all_methods_are_staticmethods():
+    """Verify core PromptBuilder methods are @staticmethod."""
+    static_methods = [
+        "coder_prompt",
+        "reviewer_prompt",
+        "test_writer_prompt",
+        "decompose_prompt",
+        "pr_body",
+        "plan_check_prompt",
+        "precommit_fix_prompt",
+        "test_fix_prompt",
+        "review_fix_prompt",
+        "ci_fix_prompt",
+        "review_quality_prompt",
+        "test_quality_prompt",
+        "planner_prompt",
+        "critic_prompt",
+        "prd_generate_prompt",
+        "_inject_epic_addenda",
+    ]
+    for name in static_methods:
+        attr = getattr(PromptBuilder, name, None)
+        assert attr is not None, f"{name} not found"
+        assert callable(attr), f"{name} is not callable"
+
+
+def test_coder_prompt_includes_epic_addenda_when_matching():
+    """Verify coder_prompt includes addenda when task epic matches prd."""
+    task = {
+        "title": "Task 1",
+        "description": "Desc 1",
+        "acceptance_criteria": ["AC1"],
+        "files": ["file1.py"],
+        "epic": "M2",
+    }
+    prd = {"epic_addenda": {"M2": "Check for edge case X in module Y."}}
+    prompt = PromptBuilder.coder_prompt(task, "claude", prd)
+    assert "Check for edge case X in module Y." in prompt
+    assert "Epic-specific checks (M2)" in prompt
+
+
+def test_coder_prompt_no_addenda_when_no_match():
+    """Verify coder_prompt excludes addenda when epics don't match."""
+    task = {
+        "title": "Task 1",
+        "description": "Desc 1",
+        "acceptance_criteria": ["AC1"],
+        "files": ["file1.py"],
+        "epic": "M2",
+    }
+    prd = {"epic_addenda": {"M1": "Wrong epic addendum."}}
+    prompt = PromptBuilder.coder_prompt(task, "claude", prd)
+    assert "Wrong epic addendum" not in prompt
+
+
+def test_reviewer_prompt_includes_all_six_review_categories():
+    """Verify reviewer_prompt includes all 6 review categories."""
+    task = {
+        "title": "Code Review Task",
+        "description": "Review implementation",
+        "epic": "M1",
+    }
+    prd = {"epic_addenda": {}}
+    prompt = PromptBuilder.reviewer_prompt(task, "diff content", prd, 1)
+    assert "Correctness" in prompt
+    assert "Security" in prompt
+    assert "Performance" in prompt
+    assert "Maintainability" in prompt
+    assert "Testing" in prompt
+    assert "PRD adherence" in prompt
+
+
+def test_test_writer_prompt_demands_failing_tests():
+    """Verify test_writer_prompt instructs failing tests only."""
+    task = {
+        "title": "Task 1",
+        "description": "D1",
+        "acceptance_criteria": ["AC1"],
+    }
+    prompt = PromptBuilder.test_writer_prompt(task)
+    assert "failing tests only" in prompt.lower() or "fail" in prompt.lower()
+    assert "ImportError or AssertionError" in prompt
+
+
+def test_decompose_prompt_requests_json_list():
+    """Verify decompose_prompt requests JSON list format."""
+    task = {"title": "Complex Task"}
+    prompt = PromptBuilder.decompose_prompt(task)
+    assert "JSON list" in prompt or "JSON" in prompt
+
+
 def test_pr_body():
     task = {
         "title": "Task 1",

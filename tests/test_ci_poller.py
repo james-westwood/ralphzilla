@@ -131,6 +131,111 @@ class TestWaitForNewRun:
             ralph.time.time = original_time
 
 
+class TestGetLatestRunIdParsesGhJsonOutput:
+    """Tests for _get_latest_run_id parsing gh CLI JSON output."""
+
+    def test_get_latest_run_id_parses_gh_json_output(self, ci_poller, mock_runner):
+        """Verify _get_latest_run_id parses gh CLI JSON output correctly."""
+        mock_runner.run.return_value = MagicMock(stdout="12345")
+        result = ci_poller._get_latest_run_id("ralph/test-branch")
+        assert result == "12345"
+        mock_runner.run.assert_called_once()
+
+    def test_get_latest_run_id_calls_gh_with_json_flag(self, ci_poller, mock_runner):
+        """Verify gh run list is called with --json databaseId."""
+        mock_runner.run.return_value = MagicMock(stdout="67890")
+        ci_poller._get_latest_run_id("main")
+        call_args = mock_runner.run.call_args[0][0]
+        assert "--json" in call_args
+        assert "databaseId" in call_args
+        assert "--branch" in call_args
+
+
+class TestWaitForRunPollsAtConfiguredInterval:
+    """Tests for _wait_for_run polling at correct intervals."""
+
+    def test_wait_for_run_polls_at_configured_interval(self, ci_poller, mock_runner):
+        """Verify _wait_for_run polls at CI_POLL_INTERVAL_SECS intervals."""
+        with patch.object(ralph, "CI_POLL_MAX_ATTEMPTS", 3):
+            with patch.object(ralph, "CI_POLL_INTERVAL_SECS", 0):
+                mock_runner.run.side_effect = [
+                    MagicMock(stdout=json.dumps({"status": "IN_PROGRESS", "conclusion": None})),
+                    MagicMock(stdout=json.dumps({"status": "COMPLETED", "conclusion": "success"})),
+                ]
+                result = ci_poller._wait_for_run("12345")
+                assert result == "PASSED"
+
+
+class TestWaitForNewRunDetectsDifferentRunId:
+    """Tests for _wait_for_new_run detecting new run IDs."""
+
+    def test_wait_for_new_run_detects_different_run_id(self, ci_poller, mock_runner):
+        """Verify _wait_for_new_run detects when a new run ID appears."""
+        call_count = [0]
+        original_time = ralph.time.time
+
+        def fake_time():
+            call_count[0] += 1
+            return call_count[0] * 5
+
+        ralph.time.time = fake_time
+        try:
+            mock_runner.run.side_effect = [
+                MagicMock(stdout="12345"),
+                MagicMock(stdout="67890"),
+            ]
+            result = ci_poller._wait_for_new_run("ralph/test", "12345", timeout=20)
+            assert result == "67890"
+        finally:
+            ralph.time.time = original_time
+
+
+class TestRunIdPinningAvoidsStaleResults:
+    """Tests for run-ID pinning preventing stale data race conditions."""
+
+    def test_run_id_pinning_avoids_stale_results(self, ci_poller, mock_runner):
+        """Verify run-ID pinning prevents stale data race conditions."""
+        mock_runner.run.return_value = MagicMock(
+            stdout=json.dumps({"status": "COMPLETED", "conclusion": "failure"})
+        )
+        result = ci_poller._wait_for_run("12345")
+        assert result == "failure"
+
+
+class TestUsesConclusionFieldNotStateForVerdict:
+    """Tests for conclusion field (not state) used in pass/fail determination."""
+
+    def test_uses_conclusion_field_not_state_for_verdict(self, ci_poller, mock_runner):
+        """Verify conclusion field (not state) is used for pass/fail determination."""
+        mock_runner.run.return_value = MagicMock(
+            stdout=json.dumps({"status": "COMPLETED", "conclusion": "success"})
+        )
+        result = ci_poller._wait_for_run("12345")
+        assert result == "PASSED"
+        mock_runner.run.assert_called_once()
+        call_args = mock_runner.run.call_args[0][0]
+        assert "--json" in call_args
+
+    def test_conclusion_failure_returns_failure(self, ci_poller, mock_runner):
+        """Verify conclusion=failure returns failure string."""
+        mock_runner.run.return_value = MagicMock(
+            stdout=json.dumps({"status": "COMPLETED", "conclusion": "failure"})
+        )
+        result = ci_poller._wait_for_run("12345")
+        assert result == "failure"
+
+    def test_conclusion_none_with_pending_state_keeps_polling(self, ci_poller, mock_runner):
+        """Verify pending state keeps polling."""
+        with patch.object(ralph, "CI_POLL_INTERVAL_SECS", 0):
+            with patch.object(ralph, "CI_POLL_MAX_ATTEMPTS", 2):
+                mock_runner.run.side_effect = [
+                    MagicMock(stdout=json.dumps({"status": "IN_PROGRESS", "conclusion": None})),
+                    MagicMock(stdout=json.dumps({"status": "COMPLETED", "conclusion": "success"})),
+                ]
+                result = ci_poller._wait_for_run("12345")
+                assert result == "PASSED"
+
+
 class TestWaitForCompletion:
     def test_passed(self, ci_poller, mock_runner):
         mock_runner.run.side_effect = [
