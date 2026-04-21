@@ -1478,16 +1478,32 @@ class TaskTracker:
         progress_path: Path,
         runner: SubprocessRunner,
         logger: RalphLogger,
+        workstream: str | None = None,
     ):
         self.prd_path = prd_path
         self.progress_path = progress_path
         self.runner = runner
         self.logger = logger
+        self.workstream = workstream
 
     def load(self) -> dict:
         """Reads and returns prd.json from disk."""
         with open(self.prd_path, "r", encoding="utf-8") as f:
             return json.load(f)
+
+    def load_tasks(self, workstream: str | None = None) -> list[dict]:
+        """Returns tasks from prd.json, optionally filtered by workstream prefix.
+
+        If *workstream* is provided, only tasks whose ``id`` starts with that
+        prefix are returned.  Falls back to ``self.workstream`` when the
+        argument is omitted (``None``).
+        """
+        effective = workstream if workstream is not None else self.workstream
+        prd = self.load()
+        tasks = prd.get("tasks", [])
+        if effective is not None:
+            tasks = [t for t in tasks if t["id"].startswith(effective)]
+        return tasks
 
     def _save(self, prd: dict) -> None:
         """Writes prd dict back to prd.json."""
@@ -1501,10 +1517,15 @@ class TaskTracker:
         - owner != 'human'
         - decomposed != true
         - all depends_on task IDs are completed
+        - id starts with self.workstream prefix (when workstream is set)
         """
         prd = self.load()
-        tasks = prd.get("tasks", [])
-        completed_ids = {t["id"] for t in tasks if t.get("completed")}
+        all_tasks = prd.get("tasks", [])
+        completed_ids = {t["id"] for t in all_tasks if t.get("completed")}
+
+        tasks = all_tasks
+        if self.workstream:
+            tasks = [t for t in all_tasks if t["id"].startswith(self.workstream)]
 
         for task in tasks:
             if task.get("completed"):
@@ -1528,10 +1549,13 @@ class TaskTracker:
         return None
 
     def count_remaining(self) -> int:
-        """Counts incomplete ralph-owned non-decomposed tasks."""
+        """Counts incomplete ralph-owned non-decomposed tasks in the current workstream."""
         prd = self.load()
+        tasks = prd.get("tasks", [])
+        if self.workstream:
+            tasks = [t for t in tasks if t["id"].startswith(self.workstream)]
         count = 0
-        for task in prd.get("tasks", []):
+        for task in tasks:
             if (
                 not task.get("completed")
                 and task.get("owner") != "human"
@@ -2149,7 +2173,7 @@ class WorktreeManager:
 
     def list_active_worktrees(self) -> list[str]:
         """Return task IDs for which a worktree directory currently exists."""
-        base = self.repo_dir / self.WORKTREES_DIR
+        base = self._worktrees_base()
         if not base.exists():
             return []
         return sorted(p.name for p in base.iterdir() if p.is_dir())
@@ -2183,7 +2207,15 @@ class WorktreeManager:
         return f"feature-{task_id}"
 
     def _worktree_path(self, task_id: str) -> Path:
+        if self.workstream:
+            return self.repo_dir / self.WORKTREES_DIR / self.workstream / task_id
         return self.repo_dir / self.WORKTREES_DIR / task_id
+
+    def _worktrees_base(self) -> Path:
+        """Returns the base directory for this manager's worktrees."""
+        if self.workstream:
+            return self.repo_dir / self.WORKTREES_DIR / self.workstream
+        return self.repo_dir / self.WORKTREES_DIR
 
 
 class PRManager:
@@ -3927,6 +3959,7 @@ class Orchestrator:
             config.repo_dir / PROGRESS_FILE,
             self.runner,
             logger,
+            workstream=config.workstream,
         )
         self.branch_manager = BranchManager(config.repo_dir, self.runner, logger)
         self.pr_manager = PRManager(self.runner, logger)
