@@ -1199,7 +1199,7 @@
         "tests/test_workstream.py: TaskTracker.load_tasks() respects workstream filter"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [],
       "epic": "M5",
       "complexity": 2
