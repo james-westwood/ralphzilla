@@ -859,7 +859,7 @@
         "All tests pass with uv run pytest tests/ -v"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [
         "M1-06",
         "M1-08"
