@@ -20,7 +20,7 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -29,6 +29,8 @@ import click
 # --- Constants ---
 
 DEFAULT_MAX_ITERATIONS = 10
+RUN_HISTORY_FILE = ".ralph/run-history.json"
+FINAL_LOG_LINES = 50
 DEFAULT_MAX_PRECOMMIT_ROUNDS = 2
 DEFAULT_MAX_REVIEW_ROUNDS = 2
 DEFAULT_MAX_CI_FIX_ROUNDS = 2
@@ -240,6 +242,16 @@ class TestQualityResult:
     deterministic_issues: list[str]  # ast-detected problems
     ai_issues: list[str]  # AI-flagged semantic hollowness
     rounds_used: int
+
+
+@dataclass
+class CleanExitResult:
+    clean: bool
+    has_sprint_complete: bool = False
+    has_progress_update: bool = False
+    no_traceback: bool = True
+    missing_markers: list[str] = field(default_factory=list)
+    fatal_error_type: str | None = None
 
 
 @dataclass
@@ -732,6 +744,121 @@ class RalphLogger:
     def fatal(self, message: str) -> None:
         self._log("FATAL", message)
         sys.exit(1)
+
+
+class LoopSupervisor:
+    """
+    Monitors each sprint run for clean-exit verification.
+    Cross-checks ralph.log for CLEAN_EXIT_MARKERS after Orchestrator.run() completes.
+    """
+
+    SPRINT_COMPLETE_MARKER = "Sprint complete"
+    PROGRESS_UPDATE_MARKER = "progress.txt updated"
+    TRACEBACK_PATTERNS = ("Traceback", "Unhandled exception")
+
+    def __init__(self, logger: RalphLogger, log_path: Path, progress_path: Path):
+        self.logger = logger
+        self.log_path = log_path
+        self.progress_path = progress_path
+
+    def verify_clean_exit(self) -> CleanExitResult:
+        """
+        Reads ralph.log final 50 lines and checks for clean-exit markers:
+        - 'Sprint complete' log line
+        - 'progress.txt updated' log line
+        - No 'Traceback' or 'Unhandled exception' in final lines
+
+        Returns CleanExitResult with clean status and missing markers.
+        """
+        if not self.log_path.exists():
+            self.logger.warn("ralph.log not found for clean-exit verification")
+            return CleanExitResult(
+                clean=False,
+                missing_markers=["ralph.log not found"],
+            )
+
+        try:
+            with open(self.log_path, "r", encoding="utf-8") as f:
+                all_lines = f.readlines()
+        except OSError as e:
+            self.logger.warn(f"Failed to read ralph.log: {e}")
+            return CleanExitResult(
+                clean=False,
+                missing_markers=["ralph.log read error"],
+                fatal_error_type="log_read_error",
+            )
+
+        final_lines = (
+            all_lines[-FINAL_LOG_LINES:] if len(all_lines) > FINAL_LOG_LINES else all_lines
+        )
+        final_text = "".join(final_lines)
+
+        has_sprint_complete = self.SPRINT_COMPLETE_MARKER in final_text
+        has_progress_update = self.PROGRESS_UPDATE_MARKER in final_text
+        no_traceback = not any(pattern in final_text for pattern in self.TRACEBACK_PATTERNS)
+
+        missing_markers = []
+        if not has_sprint_complete:
+            missing_markers.append("Sprint complete marker missing")
+        if not has_progress_update:
+            missing_markers.append("progress.txt update marker missing")
+        if not no_traceback:
+            missing_markers.append("Traceback/Unhandled exception found in final log lines")
+
+        clean = has_sprint_complete and has_progress_update and no_traceback
+
+        fatal_error_type = None
+        if not no_traceback:
+            for line in final_lines:
+                if "Traceback" in line or "Unhandled exception" in line:
+                    fatal_error_type = "traceback_in_logs"
+                    break
+
+        result = CleanExitResult(
+            clean=clean,
+            has_sprint_complete=has_sprint_complete,
+            has_progress_update=has_progress_update,
+            no_traceback=no_traceback,
+            missing_markers=missing_markers,
+            fatal_error_type=fatal_error_type,
+        )
+
+        if not clean:
+            self.logger.warn(f"Clean-exit verification failed: {missing_markers}")
+
+        return result
+
+    def record_run(self, result: CleanExitResult, tasks_completed: int) -> None:
+        """
+        Appends run entry to .ralph/run-history.json with:
+        - timestamp (ISO format)
+        - tasks_completed count
+        - final_state (clean/unclean)
+        - fatal_error_type (if any)
+        """
+        history_path = self.log_path.parent / RUN_HISTORY_FILE
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+
+        history: list[dict] = []
+        if history_path.exists():
+            try:
+                with open(history_path, "r", encoding="utf-8") as f:
+                    history = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                self.logger.warn("Failed to read existing run history, starting fresh")
+
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "tasks_completed": tasks_completed,
+            "final_state": "clean" if result.clean else "unclean",
+            "fatal_error_type": result.fatal_error_type,
+        }
+        history.append(entry)
+
+        with open(history_path, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
+
+        self.logger.info(f"Recorded run history: {entry['final_state']} ({tasks_completed} tasks)")
 
 
 class SubprocessRunner:
@@ -2349,6 +2476,11 @@ class Orchestrator:
         self.review_loop = ReviewLoop(self.pr_manager, self.ai_runner, logger, config)
         self.ci_poller = CIPoller(self.runner, self.ai_runner, logger, config)
         self.plan_checker = PlanChecker(self.task_tracker, self.ai_runner, logger)
+        self.loop_supervisor = LoopSupervisor(
+            logger,
+            config.repo_dir / LOG_FILE_NAME,
+            config.repo_dir / PROGRESS_FILE,
+        )
 
         self._nested_claude_warning_issued = False
 
@@ -2557,6 +2689,7 @@ class Orchestrator:
         )
         now = datetime.now().strftime("%Y-%m-%d")
         self.task_tracker.append_progress(task["id"], task["title"], pr_info.number, now)
+        self.logger.info("progress.txt updated")
         self.task_tracker.mark_complete(task["id"])
 
         try:
@@ -2637,7 +2770,7 @@ class Orchestrator:
             stop_reason = self._check_stop_conditions(task)
             if stop_reason:
                 self.logger.info(f"Stopping: {stop_reason}")
-                self.logger.info("Loop finished.")
+                self._finalize_run()
                 return
 
             self.logger.info(
@@ -2651,12 +2784,26 @@ class Orchestrator:
             if result.fatal:
                 self.logger.error(f"Task failed: {result.message}")
                 self.logger.info("Loop stopped due to fatal error.")
+                self._finalize_run()
                 return
 
             prd = self.task_tracker.load()
 
         self.logger.info(f"Max iterations ({max_iterations}) reached.")
+        self._finalize_run()
+
+    def _finalize_run(self) -> None:
+        """Handle clean-exit verification and run history recording."""
+        self.logger.info("Sprint complete")
         self.logger.info("Loop finished.")
+
+        clean_result = self.loop_supervisor.verify_clean_exit()
+
+        completed_count = sum(
+            1 for t in self.task_tracker.load().get("tasks", []) if t.get("completed")
+        )
+
+        self.loop_supervisor.record_run(clean_result, completed_count)
 
 
 @click.group()
