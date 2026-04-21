@@ -1089,7 +1089,7 @@
         "ralph.py: ScrumMaster class with _post_sprint_cleanup() method"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [],
       "epic": "M4"
     },

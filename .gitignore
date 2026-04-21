@@ -27,3 +27,5 @@ progress.txt
 .vscode/
 *.swp
 *.swo
+ralph-summary-*.md
+.ralph/
