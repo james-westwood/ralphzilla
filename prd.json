@@ -1122,7 +1122,7 @@
         "tests/test_dependency_graph.py: DependencyCycleError raised on cycle with helpful message"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [],
       "epic": "M5",
       "complexity": 2
