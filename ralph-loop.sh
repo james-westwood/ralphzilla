@@ -173,10 +173,11 @@ run_reviewer() {
     # Python pty.openpty() provides a real PTY so output flows correctly.
     if timeout 5m python3 -c "
 import pty, os, sys, subprocess
-prompt = sys.argv[1]
+model = sys.argv[1]
+prompt = sys.argv[2]
 master, slave = pty.openpty()
 proc = subprocess.Popen(
-    ['opencode', 'run', '-m', '$OPENCODE_REVIEWER_MODEL', prompt],
+    ['opencode', 'run', '-m', model, prompt],
     stdout=slave, stderr=slave, close_fds=True
 )
 os.close(slave)
@@ -193,7 +194,7 @@ proc.wait()
 os.close(master)
 sys.stdout.buffer.write(output)
 sys.exit(proc.returncode)
-" "$prompt"; then
+" "$OPENCODE_REVIEWER_MODEL" "$prompt"; then
       return 0
     else
       local exit_code=$?
