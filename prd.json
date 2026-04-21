@@ -1073,7 +1073,7 @@
         "ralph.py: EscalationManager class with should_escalate() and escalate() methods"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [],
       "epic": "M4"
     },
