@@ -1160,7 +1160,7 @@
         "tests/test_worktree_manager.py: parallel tasks use separate worktrees without conflicts"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [
         "M5-01"
       ],

@@ -19,6 +19,7 @@ import enum
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -327,6 +328,7 @@ class Config:
     opencode_only: bool = False
     validate_plan: bool = False  # Tier 2 AI sanity check on prd.json
     max_workers: int | None = None  # WaveExecutor parallelism cap (None = CPU count)
+    workstream: str | None = None  # Optional prefix for worktree branch names
 
 
 @dataclass
@@ -1949,6 +1951,127 @@ class BranchManager:
         """Replaces non-alphanumeric with hyphens, lowercases, truncates to 40 chars."""
         sanitised = re.sub(r"[^a-zA-Z0-9-]", "-", title)
         return sanitised.lower()[:40].strip("-")
+
+
+class WorktreeError(RalphError):
+    """Failed to create, access, or remove a git worktree."""
+
+    pass
+
+
+class WorktreeManager:
+    """Manages git worktrees for parallel task isolation.
+
+    Each task gets its own worktree at .ralph/worktrees/{task_id}/ with a
+    dedicated branch so concurrent tasks never share a working tree.
+
+    Worktrees are always cleaned up after task completion — success or failure.
+    The `workstream` prefix is prepended to branch names when set, e.g.:
+        feature-{workstream}-{task_id}  (workstream set)
+        feature-{task_id}               (no workstream)
+    """
+
+    WORKTREES_DIR = ".ralph/worktrees"
+
+    def __init__(
+        self,
+        repo_dir: Path,
+        runner: SubprocessRunner,
+        logger: RalphLogger,
+        workstream: str | None = None,
+    ) -> None:
+        self.repo_dir = repo_dir
+        self.runner = runner
+        self.logger = logger
+        self.workstream = workstream
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def create_worktree(self, task_id: str, base_branch: str) -> Path:
+        """Create an isolated git worktree for *task_id* branched from *base_branch*.
+
+        Returns the Path to the worktree directory.
+        Raises WorktreeError if the git command fails.
+        """
+        worktree_path = self._worktree_path(task_id)
+        branch_name = self._branch_name(task_id)
+
+        worktree_path.parent.mkdir(parents=True, exist_ok=True)
+
+        self.logger.info(
+            f"Creating worktree for {task_id}: path={worktree_path} branch={branch_name}"
+        )
+
+        result = self.runner.run(
+            ["git", "worktree", "add", "-b", branch_name, str(worktree_path), base_branch],
+            cwd=self.repo_dir,
+        )
+        if result.returncode != 0:
+            raise WorktreeError(f"Failed to create worktree for {task_id}: {result.stderr.strip()}")
+
+        return worktree_path
+
+    def cleanup_worktree(self, task_id: str) -> None:
+        """Remove the worktree for *task_id* and prune stale git references.
+
+        Safe to call even if the worktree was never created or was already removed.
+        """
+        worktree_path = self._worktree_path(task_id)
+
+        self.logger.info(f"Cleaning up worktree for {task_id}: {worktree_path}")
+
+        # Remove the worktree via git so git's internal tracking is updated
+        self.runner.run(
+            ["git", "worktree", "remove", "--force", str(worktree_path)],
+            cwd=self.repo_dir,
+        )
+
+        # Prune any stale references left behind
+        self.runner.run(["git", "worktree", "prune"], cwd=self.repo_dir)
+
+        # Belt-and-braces: remove the directory if git worktree remove left it
+        if worktree_path.exists():
+            shutil.rmtree(worktree_path, ignore_errors=True)
+
+    def list_active_worktrees(self) -> list[str]:
+        """Return task IDs for which a worktree directory currently exists."""
+        base = self.repo_dir / self.WORKTREES_DIR
+        if not base.exists():
+            return []
+        return sorted(p.name for p in base.iterdir() if p.is_dir())
+
+    def make_isolated_runner(
+        self,
+        inner: Callable[[str, Path], TaskResult],
+    ) -> Callable[[str], TaskResult]:
+        """Wrap *inner* so each call gets its own worktree.
+
+        *inner* receives (task_id, worktree_path).  The worktree is created
+        before the call and removed afterwards regardless of outcome.
+        """
+
+        def runner(task_id: str) -> TaskResult:
+            worktree_path = self.create_worktree(task_id, MAIN_BRANCH)
+            try:
+                return inner(task_id, worktree_path)
+            finally:
+                self.cleanup_worktree(task_id)
+
+        return runner
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _branch_name(self, task_id: str) -> str:
+        if self.workstream:
+            return f"feature-{self.workstream}-{task_id}"
+        return f"feature-{task_id}"
+
+    def _worktree_path(self, task_id: str) -> Path:
+        return self.repo_dir / self.WORKTREES_DIR / task_id
 
 
 class PRManager:
@@ -4386,6 +4509,13 @@ def cli():
     type=int,
     help="Max parallel tasks in a wave (default: CPU count)",
 )
+@click.option(
+    "--workstream",
+    "workstream",
+    default=None,
+    type=str,
+    help="Workstream prefix for worktree branch names (e.g. 'auth' → feature-auth-{task})",
+)
 def run(
     max_iterations: int,
     skip_review: bool,
@@ -4404,6 +4534,7 @@ def run(
     dry_run: bool,
     repo_dir: Path | None,
     max_workers: int | None,
+    workstream: str | None,
 ) -> int:
     """Run the AI sprint loop."""
     if repo_dir is None:
@@ -4432,6 +4563,7 @@ def run(
         opencode_only=opencode_only,
         validate_plan=validate_plan,
         max_workers=max_workers,
+        workstream=workstream,
     )
 
     logger = RalphLogger(log_file)
