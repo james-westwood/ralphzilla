@@ -169,12 +169,17 @@ run_reviewer() {
     fi
   else
     # opencode reviewer — must run under a PTY or it hangs with no output.
-    # opencode detects non-TTY stdout (e.g. command substitution $()) and blocks silently.
-    # Python pty.openpty() provides a real PTY so output flows correctly.
+    # Prompt written to a temp file to avoid shell quoting issues with diff content.
+    local _review_tmpfile
+    _review_tmpfile=$(mktemp /tmp/ralph_review_XXXXXX.txt)
+    printf '%s' "$prompt" > "$_review_tmpfile"
     if timeout 5m python3 -c "
 import pty, os, sys, subprocess
 model = sys.argv[1]
-prompt = sys.argv[2]
+prompt_file = sys.argv[2]
+with open(prompt_file) as f:
+    prompt = f.read()
+os.unlink(prompt_file)
 master, slave = pty.openpty()
 proc = subprocess.Popen(
     ['opencode', 'run', '-m', model, prompt],
@@ -194,7 +199,7 @@ proc.wait()
 os.close(master)
 sys.stdout.buffer.write(output)
 sys.exit(proc.returncode)
-" "$OPENCODE_REVIEWER_MODEL" "$prompt"; then
+" "$OPENCODE_REVIEWER_MODEL" "$_review_tmpfile"; then
       return 0
     else
       local exit_code=$?
