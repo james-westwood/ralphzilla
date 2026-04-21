@@ -764,16 +764,170 @@ class LoopSupervisor:
     """
     Monitors each sprint run for clean-exit verification.
     Cross-checks ralph.log for CLEAN_EXIT_MARKERS after Orchestrator.run() completes.
+    Runs ralph.py as a subprocess with lifecycle monitoring.
     """
 
     SPRINT_COMPLETE_MARKER = "Sprint complete"
     PROGRESS_UPDATE_MARKER = "progress.txt updated"
     TRACEBACK_PATTERNS = ("Traceback", "Unhandled exception")
+    ERROR_MARKERS = ("ERROR", "FATAL", "ERROR:", "FATAL:")
 
-    def __init__(self, logger: RalphLogger, log_path: Path, progress_path: Path):
+    def __init__(
+        self,
+        logger: RalphLogger,
+        log_path: Path,
+        progress_path: Path,
+        ralph_path: Path | None = None,
+    ):
         self.logger = logger
         self.log_path = log_path
         self.progress_path = progress_path
+        self.ralph_path = ralph_path or Path(__file__).parent / "ralph.py"
+        self._process: subprocess.Popen | None = None
+
+    def run(
+        self,
+        task_id: str | None = None,
+        max_iterations: int = 1,
+        resume: bool = False,
+        timeout: int = SUBPROCESS_TIMEOUT_SECS,
+    ) -> int:
+        """
+        Runs ralph.py as a subprocess.
+
+        Args:
+            task_id: Specific task ID to run (optional)
+            max_iterations: Number of sprint iterations
+            resume: Resume from existing branch
+            timeout: Subprocess timeout in seconds
+
+        Returns:
+            Exit code from ralph.py process
+        """
+        cmd = [
+            sys.executable,
+            str(self.ralph_path),
+            "run",
+            "--max",
+            str(max_iterations),
+        ]
+        if task_id:
+            cmd.extend(["--task", task_id])
+        if resume:
+            cmd.append("--resume")
+
+        self.logger.info(f"Starting LoopSupervisor: {' '.join(cmd)}")
+
+        self._process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        try:
+            stdout, stderr = self._process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            stdout, stderr = self._process.communicate()
+            self.logger.error(f"Process timed out after {timeout}s — killed")
+            return 1
+
+        exit_code = self._process.returncode
+
+        if stdout:
+            for line in stdout.splitlines()[-20:]:
+                self.logger.info(f"[ralph.py] {line}")
+        if stderr:
+            for line in stderr.splitlines()[-20:]:
+                self.logger.warn(f"[ralph.py stderr] {line}")
+
+        if exit_code != 0:
+            self.logger.error(f"ralph.py exited with code {exit_code}")
+            return exit_code
+
+        self.logger.info("ralph.py completed successfully")
+        return 0
+
+    def get_exit_code(self) -> int | None:
+        """Returns the exit code of the subprocess, or None if still running."""
+        if self._process is None:
+            return None
+        return self._process.returncode
+
+    def parse_log_for_errors(self) -> list[str]:
+        """
+        Parses the log file for error markers.
+
+        Returns list of error lines containing ERROR or FATAL markers.
+        """
+        errors = []
+        if not self.log_path.exists():
+            return errors
+
+        try:
+            with open(self.log_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    for marker in self.ERROR_MARKERS:
+                        if marker in line:
+                            errors.append(line.strip())
+                            break
+        except OSError as e:
+            self.logger.warn(f"Failed to parse log for errors: {e}")
+
+        return errors
+
+    def monitor(self, poll_interval: int = 5) -> bool:
+        """
+        Monitors running subprocess health via log file polling.
+
+        Checks for error markers in the log file while process runs.
+        Returns True if healthy, False if errors detected.
+        """
+        if not self._process or self._process.poll() is not None:
+            return True
+
+        if self.log_path.exists():
+            try:
+                with open(self.log_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                for marker in self.ERROR_MARKERS:
+                    if marker in content:
+                        self.logger.warn(f"Error marker detected in log: {marker}")
+                        return False
+            except OSError as e:
+                self.logger.warn(f"Failed to read log for monitoring: {e}")
+
+        return True
+
+    def detect_hung(self, timeout: int = 300) -> bool:
+        """
+        Detects hung process by checking last log activity timestamp.
+
+        Args:
+            timeout: Seconds of no activity before considering hung
+
+        Returns:
+            True if process appears hung, False otherwise
+        """
+        if not self.log_path.exists():
+            return False
+
+        try:
+            stat = self.log_path.stat()
+            mtime = stat.st_mtime
+            now = time.time()
+            if now - mtime > timeout:
+                self.logger.warn(f"No log activity for {timeout}s — possible hung")
+                return True
+        except OSError:
+            pass
+
+        return False
+
+    def is_running(self) -> bool:
+        """Returns True if subprocess is currently running."""
+        return self._process is not None and self._process.poll() is None
 
     def verify_clean_exit(self) -> CleanExitResult:
         """
