@@ -168,9 +168,32 @@ run_reviewer() {
       env -u CLAUDECODE claude --print "$prompt" || true
     fi
   else
-    # opencode reviewer — reads diff text only, no file writes needed
-    # timeout 5m: kimi-k2.5 hangs silently; kill it and fall back to Claude
-    if timeout 5m opencode run -m "$OPENCODE_REVIEWER_MODEL" "$prompt"; then
+    # opencode reviewer — must run under a PTY or it hangs with no output.
+    # opencode detects non-TTY stdout (e.g. command substitution $()) and blocks silently.
+    # Python pty.openpty() provides a real PTY so output flows correctly.
+    if timeout 5m python3 -c "
+import pty, os, sys, subprocess
+prompt = sys.argv[1]
+master, slave = pty.openpty()
+proc = subprocess.Popen(
+    ['opencode', 'run', '-m', '$OPENCODE_REVIEWER_MODEL', prompt],
+    stdout=slave, stderr=slave, close_fds=True
+)
+os.close(slave)
+output = b''
+while True:
+    try:
+        chunk = os.read(master, 4096)
+        if not chunk:
+            break
+        output += chunk
+    except OSError:
+        break
+proc.wait()
+os.close(master)
+sys.stdout.buffer.write(output)
+sys.exit(proc.returncode)
+" "$prompt"; then
       return 0
     else
       local exit_code=$?
