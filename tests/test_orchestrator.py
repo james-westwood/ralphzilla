@@ -19,6 +19,7 @@ from ralph import (
     PRInfo,
     RalphLogger,
     RemoteNotSSHError,
+    TaskResult,
 )
 
 
@@ -289,6 +290,49 @@ class TestRunTaskTdd:
 
         assert result.fatal is True
 
+    def test_standard_mode_does_not_call_test_writer(self, config, logger):
+        config.tdd_mode = False
+
+        orch = Orchestrator(config, logger)
+        orch.test_writer = MagicMock()
+        orch.test_quality_checker = MagicMock()
+        orch.ai_runner = MagicMock()
+        orch.ai_runner.assign_agents.return_value = ("coder", "reviewer", "writer")
+        orch.branch_manager = MagicMock()
+        orch.branch_manager.ensure_main_up_to_date.return_value = None
+        orch.branch_manager.checkout_or_create.return_value = BranchStatus(
+            existed=False, had_commits=False
+        )
+        orch.precommit_gate = MagicMock()
+        orch.test_runner = MagicMock()
+        orch.pr_manager = MagicMock()
+        orch.ci_poller = MagicMock()
+        orch.prd_guard = MagicMock()
+        orch.review_loop = MagicMock()
+        orch.runner = MagicMock()
+        orch.task_tracker = MagicMock()
+
+        orch.ai_runner.run_coder.return_value = True
+        orch.precommit_gate.run.return_value = MagicMock(passed=True)
+        orch.test_runner.run.return_value = MagicMock(passed=True)
+        orch.branch_manager.push_branch.return_value = None
+        orch.review_loop.run.return_value = MagicMock(verdict="APPROVED", rounds_used=1)
+        orch.ci_poller.wait_and_fix.return_value = MagicMock(passed=True)
+        orch.prd_guard.check.return_value = None
+        orch.pr_manager.merge.return_value = None
+        orch.branch_manager.merge_and_cleanup.return_value = None
+        orch.task_tracker.append_progress.return_value = None
+        orch.task_tracker.mark_complete.return_value = None
+        orch.task_tracker.commit_tracking.return_value = None
+
+        orch.pr_manager.create.return_value = PRInfo(number=1, url="")
+        orch.pr_manager.get_existing.return_value = None
+
+        task = {"id": "T-01", "title": "test task", "owner": "ralph"}
+        orch._run_task(task, "branch", {})
+
+        orch.test_writer.write_tests.assert_not_called()
+
 
 class TestRunTaskStandardIntegration:
     """Integration tests verifying correct execution order via call sequence tracking."""
@@ -523,3 +567,119 @@ class TestRunTaskStandardIntegration:
 
         assert result.fatal is False
         fully_mocked_orchestrator.review_loop.run.assert_not_called()
+
+
+class TestMainLoop:
+    """Tests for Orchestrator.run() main loop."""
+
+    @pytest.fixture
+    def loop_config(self, tmp_path):
+        (tmp_path / "prd.json").write_text('{"tasks": []}')
+        (tmp_path / "progress.txt").write_text("")
+        return Config(
+            max_iterations=3,
+            skip_review=False,
+            tdd_mode=False,
+            model_mode="random",
+            opencode_model="opencode/kimi-k2.5",
+            resume=False,
+            repo_dir=tmp_path,
+            log_file=tmp_path / "ralph.log",
+            max_precommit_rounds=2,
+            max_review_rounds=2,
+            max_ci_fix_rounds=2,
+            max_test_fix_rounds=2,
+            max_test_write_rounds=2,
+            force_task_id=None,
+        )
+
+    def test_main_loop_logs_iteration_and_task_id(self, loop_config, logger):
+        """Main loop logs iteration number and task ID at start of each iteration."""
+        orch = Orchestrator(loop_config, logger)
+        orch._preflight = MagicMock()
+        orch.task_tracker = MagicMock()
+        orch.task_tracker.load.return_value = {"tasks": []}
+        call_count = [0]
+
+        def get_next_task():
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return {"id": "T-01", "title": "test task", "owner": "ralph"}
+            return None
+
+        orch.task_tracker.get_next_task = get_next_task
+        orch._run_task = MagicMock(return_value=TaskResult(fatal=False))
+
+        def check_stop(task):
+            if task is None:
+                return "ALL TASKS COMPLETE"
+            if task.get("owner") == "human":
+                return "HUMAN_TASK_NEXT"
+            return None
+
+        orch._check_stop_conditions = check_stop
+
+        log_lines = []
+        orch.logger.info = lambda msg: log_lines.append(msg)
+
+        orch.run(max_iterations=2)
+
+        assert any("Iteration" in line and "T-01" in line for line in log_lines)
+
+    def test_main_loop_stops_on_fatal_task_result(self, loop_config, logger):
+        """Main loop stops when _run_task returns fatal TaskResult."""
+        orch = Orchestrator(loop_config, logger)
+        orch._preflight = MagicMock()
+        orch.task_tracker = MagicMock()
+        orch.task_tracker.load.return_value = {"tasks": []}
+        orch.task_tracker.get_next_task.return_value = {
+            "id": "T-01",
+            "title": "test task",
+            "owner": "ralph",
+        }
+        orch._run_task = MagicMock(return_value=TaskResult(fatal=True, message="Coder failed"))
+        orch._check_stop_conditions = MagicMock(return_value=None)
+
+        log_lines = []
+        orch.logger.info = lambda msg: log_lines.append(msg)
+        orch.logger.error = lambda msg: log_lines.append(msg)
+
+        orch.run(max_iterations=2)
+
+        assert any("fatal" in line.lower() or "failed" in line.lower() for line in log_lines)
+
+    def test_main_loop_logs_clean_exit_reason(self, loop_config, logger):
+        """Main loop logs clean exit reason when loop ends normally."""
+        orch = Orchestrator(loop_config, logger)
+        orch._preflight = MagicMock()
+        orch.task_tracker = MagicMock()
+        orch.task_tracker.load.return_value = {"tasks": []}
+        orch.task_tracker.get_next_task.return_value = None
+        orch._check_stop_conditions = MagicMock(return_value="ALL TASKS COMPLETE")
+
+        log_lines = []
+        orch.logger.info = lambda msg: log_lines.append(msg)
+
+        orch.run(max_iterations=2)
+
+        assert any("COMPLETE" in line or "finished" in line for line in log_lines)
+
+    def test_main_loop_stops_on_human_task(self, loop_config, logger):
+        """Main loop stops when next task is owned by human."""
+        orch = Orchestrator(loop_config, logger)
+        orch._preflight = MagicMock()
+        orch.task_tracker = MagicMock()
+        orch.task_tracker.load.return_value = {"tasks": []}
+        orch.task_tracker.get_next_task.return_value = {
+            "id": "T-01",
+            "title": "test task",
+            "owner": "human",
+        }
+        orch._check_stop_conditions = MagicMock(return_value="HUMAN_TASK_NEXT")
+
+        log_lines = []
+        orch.logger.info = lambda msg: log_lines.append(msg)
+
+        orch.run(max_iterations=2)
+
+        assert any("HUMAN" in line for line in log_lines)
