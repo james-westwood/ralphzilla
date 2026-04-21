@@ -1,7 +1,7 @@
 # Ralphzilla — Roadmap
 
-**Status**: Planning
-**Last updated**: 2026-04-20
+**Status**: M1 ✓ M2 ✓ M3 ✓ — M4 in progress
+**Last updated**: 2026-04-21
 
 ---
 
@@ -21,23 +21,23 @@ Deliver the full architecture from the rewrite plan as a single working Python f
 
 ### Deliverables
 
-- [ ] `SubprocessRunner` — subprocess wrapper, `env_removals`, no `shell=True`
-- [ ] `RalphLogger` — dual-stream, fixed-width level prefix
-- [ ] `TaskTracker` — sole owner of `prd.json` / `progress.txt`; fresh load on every write
-- [ ] `PlanChecker` — structural validation (Tier 1); raises `PlanInvalidError` on schema violations
-- [ ] `BranchManager` — git operations; SSH-only enforcement; `reset --hard` sync
-- [ ] `PRManager` — `gh pr` operations; retry on fresh-PR race condition
-- [ ] `PRDGuard` — pre-merge diff check; closes PR and aborts on any `prd.json` mutation
-- [ ] `PromptBuilder` — all prompt templates as stateless static methods; `epic_addenda` support
-- [ ] `AIRunner` — claude / gemini / opencode backends; nested-Claude session detection
-- [ ] `PreCommitGate` — runs pre-commit, coder fix loop, warns after max rounds
-- [ ] `TestRunner` — runs `quality_checks` from `prd.json`; coder fix loop
-- [ ] `ReviewLoop` — reviewer + coder fix loop; `CHANGES REQUESTED` parsing
-- [ ] `CIPoller` — JSON CI parsing; run-ID pinning to avoid stale-data race; coder fix loop
-- [ ] `Orchestrator` — main loop; `_preflight()`; per-task state machine
-- [ ] CLI — all flags from the rewrite plan (`--skip-review`, `--resume`, `--task`, `--dry-run`, etc.)
-- [ ] `CODER_INSTRUCTIONS.md` template — shipped with Ralphzilla, projects copy and customise
-- [ ] `REVIEWER_INSTRUCTIONS.md` template — same
+- [x] `SubprocessRunner` — subprocess wrapper, `env_removals`, no `shell=True`
+- [x] `RalphLogger` — dual-stream, fixed-width level prefix
+- [x] `TaskTracker` — sole owner of `prd.json` / `progress.txt`; fresh load on every write
+- [x] `PlanChecker` — structural validation (Tier 1); raises `PlanInvalidError` on schema violations
+- [x] `BranchManager` — git operations; SSH-only enforcement; `reset --hard` sync
+- [x] `PRManager` — `gh pr` operations; retry on fresh-PR race condition
+- [x] `PRDGuard` — pre-merge diff check; closes PR and aborts on any `prd.json` mutation
+- [x] `PromptBuilder` — all prompt templates as stateless static methods; `epic_addenda` support
+- [x] `AIRunner` — claude / gemini / opencode backends; nested-Claude session detection
+- [x] `PreCommitGate` — runs pre-commit, coder fix loop, warns after max rounds
+- [x] `TestRunner` — runs `quality_checks` from `prd.json`; coder fix loop
+- [x] `ReviewLoop` — reviewer + coder fix loop; `CHANGES REQUESTED` parsing
+- [x] `CIPoller` — JSON CI parsing; run-ID pinning to avoid stale-data race; coder fix loop
+- [x] `Orchestrator` — main loop; `_preflight()`; per-task state machine
+- [x] CLI — all flags from the rewrite plan (`--skip-review`, `--resume`, `--task`, `--dry-run`, etc.)
+- [x] `CODER_INSTRUCTIONS.md` template — shipped with Ralphzilla, projects copy and customise
+- [x] `REVIEWER_INSTRUCTIONS.md` template — same
 
 ### Success criteria
 
@@ -54,13 +54,13 @@ Deliver the full architecture from the rewrite plan as a single working Python f
 
 ### Deliverables
 
-- [ ] Unit tests for all classes — `TaskTracker`, `PlanChecker`, `BranchManager`, `PRDGuard`, `PromptBuilder`, `CIPoller`
-- [ ] Integration tests — dry-run smoke test against a fixture `prd.json`
-- [ ] ≥70% line coverage (matching GSD's bar)
-- [ ] `--validate-plan` flag — `PlanChecker` Tier 2 AI sanity check; warns on untestable ACs, non-atomic tasks
-- [ ] `LoopSupervisor` clean-exit verification — cross-checks log for `CLEAN_EXIT_MARKERS` after every run
-- [ ] Sprint summary report — markdown output at end of run (tasks completed, PRs, CI results, escalations)
-- [ ] `progress.txt` human-readable format — easy to read at a glance post-sprint
+- [x] Unit tests for all classes — `TaskTracker`, `PlanChecker`, `BranchManager`, `PRDGuard`, `PromptBuilder`, `CIPoller`
+- [x] Integration tests — dry-run smoke test against a fixture `prd.json`
+- [x] ≥70% line coverage (matching GSD's bar)
+- [x] `--validate-plan` flag — `PlanChecker` Tier 2 AI sanity check; warns on untestable ACs, non-atomic tasks
+- [x] `LoopSupervisor` clean-exit verification — cross-checks log for `CLEAN_EXIT_MARKERS` after every run
+- [x] Sprint summary report — markdown output at end of run (tasks completed, PRs, CI results, escalations)
+- [x] `progress.txt` human-readable format — easy to read at a glance post-sprint
 
 ### Success criteria
 
@@ -76,20 +76,20 @@ Deliver the full architecture from the rewrite plan as a single working Python f
 
 ### Deliverables
 
-- [ ] `ralph init` command — interactive setup via `DiscoveryWizard` (6-question grill-me lite) that produces:
+- [x] `ralph init` command — interactive setup via `DiscoveryWizard` (6-question grill-me lite) that produces:
   - `prd.json` scaffold (with `epic_addenda`, `quality_checks`, empty task list)
   - `CODER_INSTRUCTIONS.md` customised to the project's stack
   - `REVIEWER_INSTRUCTIONS.md`
   - Git hook that blocks commits directly to main
-- [ ] `DiscoveryWizard` — 6-question interactive I/O class; no AI; produces `ProjectSpec` dataclass
-- [ ] `PrdValidator` — 4-rule validation (description length, file-path AC, no credentials, valid depends_on); shared by `PlanChecker` and `PrdGenerator`
-- [ ] `ralph add` command — `PrdGenerator` class; converts free-text spec or GitHub issue URL → validated tasks appended to `prd.json`
-- [ ] `ralph plan` command — `PlanConsensus` class; Planner + Critic loop (max 3 iter); writes `ralph-plan.md`
-- [ ] `pipx`-installable package — `pipx install ralphzilla` → `ralph` available globally
-- [ ] README — quickstart, `prd.json` schema reference, CLI flag reference, worked example
-- [ ] Schema validation on `prd.json` load — clear error messages for malformed files
-- [ ] `ralph status` command — shows pending tasks, current branch state, last sprint result
-- [ ] Conflict pre-detection — warn at sprint start if two pending tasks share files in their `files` field
+- [x] `DiscoveryWizard` — 6-question interactive I/O class; no AI; produces `ProjectSpec` dataclass
+- [x] `PrdValidator` — 4-rule validation (description length, file-path AC, no credentials, valid depends_on); shared by `PlanChecker` and `PrdGenerator`
+- [x] `ralph add` command — `PrdGenerator` class; converts free-text spec or GitHub issue URL → validated tasks appended to `prd.json`
+- [x] `ralph plan` command — `PlanConsensus` class; Planner + Critic loop (max 3 iter); writes `ralph-plan.md`
+- [x] `pipx`-installable package — `pipx install ralphzilla` → `ralph` available globally
+- [x] README — quickstart, `prd.json` schema reference, CLI flag reference, worked example
+- [x] Schema validation on `prd.json` load — clear error messages for malformed files
+- [x] `ralph status` command — shows pending tasks, current branch state, last sprint result
+- [x] Conflict pre-detection — warn at sprint start if two pending tasks share files in their `files` field
 
 ### Success criteria
 
