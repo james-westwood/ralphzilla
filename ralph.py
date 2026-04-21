@@ -210,6 +210,130 @@ class ReviewQualityResult:
     reason: str  # why it failed quality check (if it did)
 
 
+@dataclass
+class ProjectSpec:
+    description: str
+    language: str
+    runtime: str
+    package_manager: str
+    test_framework: str
+    coverage_tool: str
+    quality_checks: list[str]
+    human_steps: list[str]
+    out_of_scope: list[str]
+
+
+class DiscoveryWizard:
+    """
+    Interactive wizard that asks 6 questions to gather project metadata.
+    Produces a ProjectSpec dataclass. No AI calls — pure interactive I/O.
+    """
+
+    def __init__(self, io_in, io_out):
+        self.io_in = io_in
+        self.io_out = io_out
+
+    def _prompt(self, question: str) -> str:
+        """Display a question and return the user's response."""
+        self.io_out.write(question + "\n")
+        self.io_out.flush()
+        return self.io_in.readline().strip()
+
+    def run(self) -> ProjectSpec:
+        """Ask exactly 6 questions in order, return ProjectSpec."""
+        self.io_out.write("=" * 50 + "\n")
+        self.io_out.write("Ralph Project Discovery\n")
+        self.io_out.write("=" * 50 + "\n\n")
+        self.io_out.flush()
+
+        q1 = self._prompt(
+            "1. One-sentence product description:\n"
+            "   (e.g., 'A CLI tool for automating code reviews')\n"
+            "> "
+        )
+        if not q1:
+            raise RalphError("Product description cannot be empty")
+
+        q2 = self._prompt(
+            "2. Language, runtime, package manager (comma-separated):\n"
+            "   (e.g., 'python, 3.13+, uv')\n"
+            "> "
+        )
+        if not q2:
+            raise RalphError("Language/runtime/package manager cannot be empty")
+        parts = [p.strip() for p in q2.split(",")]
+        language = parts[0] if parts else ""
+        runtime = parts[1] if len(parts) > 1 else ""
+        package_manager = parts[2] if len(parts) > 2 else parts[-1] if parts else ""
+
+        q3 = self._prompt(
+            "3. Test framework and coverage tool (comma-separated):\n"
+            "   (e.g., 'pytest, pytest-cov')\n"
+            "> "
+        )
+        if not q3:
+            raise RalphError("Test framework cannot be empty")
+        parts3 = [p.strip() for p in q3.split(",")]
+        test_framework = parts3[0] if parts3 else ""
+        coverage_tool = parts3[1] if len(parts3) > 1 else ""
+
+        q4 = self._prompt(
+            "4. Quality gate commands (one per line, empty to skip):\n"
+            "   (e.g., 'uv run pytest tests/ -v')\n"
+            "   Press Enter on an empty line when done.\n"
+            "> "
+        )
+        quality_checks = []
+        if q4.strip():
+            quality_checks.append(q4.strip())
+            while True:
+                extra = self._prompt("  > ")
+                if not extra.strip():
+                    break
+                quality_checks.append(extra.strip())
+
+        q5 = self._prompt(
+            "5. Human-only steps (credentials, infra - one per line, empty to skip):\n"
+            "   These become owner:'human' placeholder tasks.\n"
+            "   Press Enter on an empty line when done.\n"
+            "> "
+        )
+        human_steps = []
+        if q5.strip():
+            human_steps.append(q5.strip())
+            while True:
+                extra = self._prompt("  > ")
+                if not extra.strip():
+                    break
+                human_steps.append(extra.strip())
+
+        q6 = self._prompt(
+            "6. What is explicitly out of scope (one per line, empty to skip):\n"
+            "   Press Enter on an empty line when done.\n"
+            "> "
+        )
+        out_of_scope = []
+        if q6.strip():
+            out_of_scope.append(q6.strip())
+            while True:
+                extra = self._prompt("  > ")
+                if not extra.strip():
+                    break
+                out_of_scope.append(extra.strip())
+
+        return ProjectSpec(
+            description=q1,
+            language=language,
+            runtime=runtime,
+            package_manager=package_manager,
+            test_framework=test_framework,
+            coverage_tool=coverage_tool,
+            quality_checks=quality_checks,
+            human_steps=human_steps,
+            out_of_scope=out_of_scope,
+        )
+
+
 class ReviewQualityChecker:
     """
     Two-tier validation of reviews before the ReviewLoop acts on them.
@@ -2130,7 +2254,13 @@ class Orchestrator:
         self.logger.info("Loop finished.")
 
 
-@click.command()
+@click.group()
+def cli():
+    """Ralph - AI sprint runner."""
+    pass
+
+
+@cli.command("run")
 @click.option(
     "--max",
     "max_iterations",
@@ -2229,7 +2359,7 @@ class Orchestrator:
     default=None,
     help="Repo root (default: directory containing ralph.py)",
 )
-def main(
+def run(
     max_iterations: int,
     skip_review: bool,
     tdd_mode: bool,
@@ -2247,6 +2377,7 @@ def main(
     dry_run: bool,
     repo_dir: Path | None,
 ) -> int:
+    """Run the AI sprint loop."""
     if repo_dir is None:
         repo_dir = Path(__file__).parent.resolve()
 
@@ -2308,6 +2439,128 @@ def main(
     orchestrator.run(config.max_iterations)
 
     return 0
+
+
+@cli.command("init")
+@click.option(
+    "--repo-dir",
+    "repo_dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Repo root (default: directory containing ralph.py)",
+)
+def init(
+    repo_dir: Path | None,
+) -> int:
+    """Initialize a new ralph project."""
+    if repo_dir is None:
+        repo_dir = Path(__file__).parent.resolve()
+
+    wizard = DiscoveryWizard(sys.stdin, sys.stdout)
+    spec = wizard.run()
+
+    prd_path = repo_dir / PRD_FILE
+
+    prd_content = {
+        "project": spec.description,
+        "epic_addenda": {},
+        "quality_checks": spec.quality_checks,
+        "tasks": [
+            {
+                "id": f"HUMAN-{i + 1:02d}",
+                "title": step,
+                "description": f"Human-only step: {step}",
+                "acceptance_criteria": [f"Complete step: {step}"],
+                "owner": "human",
+                "completed": False,
+            }
+            for i, step in enumerate(spec.human_steps)
+        ],
+    }
+
+    with open(prd_path, "w", encoding="utf-8") as f:
+        json.dump(prd_content, f, indent=2)
+
+    coder_instructions_path = repo_dir / "CODER_INSTRUCTIONS.md"
+    coder_content = f"""# CODER INSTRUCTIONS
+
+## Project Overview
+{spec.description}
+
+## Tech Stack
+- Language: {spec.language}
+- Runtime: {spec.runtime}
+- Package Manager: {spec.package_manager}
+
+## Testing
+- Test Framework: {spec.test_framework}
+- Coverage Tool: {spec.coverage_tool}
+
+## Quality Gates
+"""
+    for cmd in spec.quality_checks:
+        coder_content += f"- {cmd}\n"
+    coder_content += """
+## Out of Scope
+"""
+    for item in spec.out_of_scope:
+        coder_content += f"- {item}\n"
+
+    with open(coder_instructions_path, "w", encoding="utf-8") as f:
+        f.write(coder_content)
+
+    reviewer_instructions_path = repo_dir / "REVIEWER_INSTRUCTIONS.md"
+    reviewer_content = f"""# REVIEWER INSTRUCTIONS
+
+## Review Categories
+1. Correctness — logic errors, edge cases, data handling
+2. Security — hardcoded secrets, injection, input validation
+3. Performance — N+1 queries, unbounded collections
+4. Maintainability — functions >50 lines, nesting >4 levels, magic numbers
+5. Testing — acceptance criteria from the task are covered; no implementation-testing
+6. PRD adherence — implementation matches the task description; nothing out of scope added
+
+## Tech Stack
+- Language: {spec.language}
+- Test Framework: {spec.test_framework}
+- Coverage Tool: {spec.coverage_tool}
+"""
+    with open(reviewer_instructions_path, "w", encoding="utf-8") as f:
+        f.write(reviewer_content)
+
+    hook_path = repo_dir / ".git" / "hooks" / "pre-push"
+    hook_content = """#!/bin/bash
+# Pre-push hook: block direct commits to main
+
+protected="main"
+remote="$1"
+url="$2"
+
+while read local_ref local_sha remote_ref remote_sha; do
+    if [[ "$local_ref" == "refs/heads/$protected" ]]; then
+        echo "ERROR: Direct push to '$protected' is not allowed."
+        echo "Please create a branch, commit your changes, and open a PR."
+        exit 1
+    fi
+done
+
+exit 0
+"""
+    hook_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(hook_path, "w", encoding="utf-8") as f:
+        f.write(hook_content)
+    hook_path.chmod(0o755)
+
+    print(f"\nInitialized ralph project in {repo_dir}")
+    print(f"  - {prd_path}")
+    print(f"  - {coder_instructions_path}")
+    print(f"  - {reviewer_instructions_path}")
+    print(f"  - {hook_path}")
+
+    return 0
+
+
+main = cli  # Backwards compatibility
 
 
 if __name__ == "__main__":
