@@ -2348,6 +2348,99 @@ class EscalationManager:
         self.logger.info(f"[EscalationManager] Created REVIEW task: {review_task['id']}")
 
 
+class ScrumMaster:
+    """
+    Post-sprint branch hygiene.
+
+    _post_sprint_cleanup() identifies and deletes stale ralph/* branches
+    to prevent branch accumulation that slows git operations and pollutes
+    the repository.
+
+    A branch is stale if it has no open PR (which covers: branches with no PR
+    at all, branches whose PR was closed without merge, and branches older than
+    STALE_DAYS with no activity).  Branches with an open PR are always kept.
+    """
+
+    STALE_DAYS = 7
+    RALPH_BRANCH_PREFIX = "ralph/"
+
+    def __init__(
+        self,
+        branch_manager: BranchManager,
+        pr_manager: PRManager,
+        runner: "SubprocessRunner",
+        logger: RalphLogger,
+        repo_dir: Path,
+    ):
+        self.branch_manager = branch_manager
+        self.pr_manager = pr_manager
+        self.runner = runner
+        self.logger = logger
+        self.repo_dir = repo_dir
+
+    def _list_local_ralph_branches(self) -> list[str]:
+        """Return local branch names matching ralph/*."""
+        result = self.runner.run(
+            ["git", "branch", "--list", f"{self.RALPH_BRANCH_PREFIX}*"],
+            cwd=self.repo_dir,
+        )
+        branches = []
+        for line in result.stdout.splitlines():
+            branch = line.strip().lstrip("* ").strip()
+            if branch:
+                branches.append(branch)
+        return branches
+
+    def _branch_age_days(self, branch: str) -> float:
+        """Return days since last commit on branch. Returns inf on error."""
+        result = self.runner.run(
+            ["git", "log", "-1", "--format=%ct", branch],
+            cwd=self.repo_dir,
+        )
+        ts_str = result.stdout.strip()
+        if not ts_str:
+            return float("inf")
+        try:
+            return (time.time() - int(ts_str)) / 86400
+        except ValueError:
+            return float("inf")
+
+    def _post_sprint_cleanup(self) -> list[str]:
+        """
+        Delete stale ralph/* branches after sprint completion.
+
+        Stale = no open PR (covers: no PR at all, PR closed without merge,
+        or no activity beyond STALE_DAYS).  Branches with an open PR are kept.
+
+        Returns list of deleted branch names.
+        """
+        branches = self._list_local_ralph_branches()
+        deleted: list[str] = []
+
+        for branch in branches:
+            self.logger.info(f"[ScrumMaster] Checking branch: {branch}")
+
+            open_pr = self.pr_manager.get_existing(branch)
+            if open_pr is not None:
+                self.logger.info(f"[ScrumMaster] Skipping {branch} — open PR #{open_pr.number}")
+                continue
+
+            age_days = self._branch_age_days(branch)
+            if age_days > self.STALE_DAYS:
+                reason = f"no activity for {age_days:.1f} days"
+            else:
+                reason = "no open PR"
+
+            self.logger.info(f"[ScrumMaster] Deleting stale branch {branch}: {reason}")
+            self.branch_manager.delete_local(branch, ignore_missing=True)
+            deleted.append(branch)
+
+        self.logger.info(
+            f"[ScrumMaster] Cleanup complete. Deleted {len(deleted)} stale branch(es)."
+        )
+        return deleted
+
+
 class PromptBuilder:
     """
     Stateless text assembly for all AI prompts.
@@ -3338,6 +3431,14 @@ class Orchestrator:
             config.repo_dir / PROGRESS_FILE,
         )
 
+        self.scrum_master = ScrumMaster(
+            self.branch_manager,
+            self.pr_manager,
+            self.runner,
+            logger,
+            config.repo_dir,
+        )
+
         self._nested_claude_warning_issued = False
 
         self._sprint_start_time: datetime | None = None
@@ -3789,6 +3890,7 @@ class Orchestrator:
         """Handle clean-exit verification and run history recording."""
         self.logger.info("Sprint complete")
         self.logger.info("Loop finished.")
+        self.scrum_master._post_sprint_cleanup()
 
         timestamp = datetime.now().strftime("%Y-%m-%dT%H%M%S")
         summary = self._generate_sprint_summary(timestamp)
