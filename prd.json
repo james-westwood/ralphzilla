@@ -1217,7 +1217,7 @@
         "tests/test_wave_summary.py: ExecutionReport.wave_histories contains all wave summaries"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [
         "M5-02",
         "M5-03",
