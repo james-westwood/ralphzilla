@@ -1788,8 +1788,258 @@ class CIPoller:
         raise CIFailedFatal(f"CI still failing after {rounds_used} fix rounds")
 
 
+class Orchestrator:
+    """
+    Main orchestrator that composes all components.
+    Runs the sprint loop: pre-flight, task selection, execution, cleanup.
+    """
+
+    def __init__(self, config: Config, logger: RalphLogger):
+        self.config = config
+        self.logger = logger
+        self.runner = SubprocessRunner(logger)
+
+        self.task_tracker = TaskTracker(
+            config.repo_dir / PRD_FILE,
+            config.repo_dir / PROGRESS_FILE,
+            self.runner,
+            logger,
+        )
+        self.branch_manager = BranchManager(config.repo_dir, self.runner, logger)
+        self.pr_manager = PRManager(self.runner, logger)
+        self.ai_runner = AIRunner(self.runner, logger, config)
+        self.prd_guard = PRDGuard(self.pr_manager, logger)
+        self.precommit_gate = PreCommitGate(self.runner, self.ai_runner, logger, config)
+        self.test_runner = TestRunner(
+            self.runner, self.ai_runner, self.task_tracker, logger, config
+        )
+        self.test_writer = TestWriter(self.ai_runner, self.runner, logger)
+        self.test_quality_checker = TestQualityChecker(self.ai_runner, logger, config)
+        self.review_loop = ReviewLoop(self.pr_manager, self.ai_runner, logger, config)
+        self.ci_poller = CIPoller(self.runner, self.ai_runner, logger, config)
+        self.plan_checker = PlanChecker(self.task_tracker, self.ai_runner, logger)
+
+        self._nested_claude_warning_issued = False
+
+    def _check_cli(self, cmd: str) -> bool:
+        """Check if a CLI command is available."""
+        try:
+            self.runner.run([cmd, "--version"], check=False)
+            return True
+        except FileNotFoundError:
+            return False
+
+    def _preflight(self, prd: dict) -> None:
+        """Validates all prerequisites before running tasks."""
+        self.logger.info("Running preflight checks...")
+
+        if not self._check_cli("gh"):
+            raise PreflightError("gh CLI not found. Install GitHub CLI.")
+
+        if not self._check_cli("git"):
+            raise PreflightError("git CLI not found.")
+
+        if "CLAUDECODE" in os.environ and not self._nested_claude_warning_issued:
+            self.logger.warn(
+                "Running inside Claude Code session — reviewer will fall back to gemini "
+                "if claude is unavailable."
+            )
+            self._nested_claude_warning_issued = True
+
+        self.branch_manager.verify_ssh_remote()
+
+        result = self.runner.run(
+            ["git", "diff", "--quiet", f"origin/{MAIN_BRANCH}", "--", PRD_FILE],
+            cwd=self.config.repo_dir,
+        )
+        if result.returncode != 0:
+            raise PreflightError(
+                f"{PRD_FILE} has uncommitted local changes. Commit and push before running ralph."
+            )
+
+        try:
+            self.plan_checker.run(prd)
+        except PlanInvalidError as e:
+            raise PreflightError(f"Plan validation failed: {e}")
+
+        self.logger.info("Preflight passed.")
+
+    def _check_stop_conditions(self, task: dict | None) -> str | None:
+        """Check if sprint should stop. Returns reason or None."""
+        if task is None:
+            return "ALL TASKS COMPLETE"
+
+        if task.get("owner") == "human":
+            return "HUMAN_TASK_NEXT"
+
+        return None
+
+    def _run_task_standard(
+        self,
+        task: dict,
+        branch: str,
+        prd: dict,
+        coder: str,
+        reviewer: str,
+        pr_info: PRInfo,
+    ) -> TaskResult:
+        """Standard mode state machine."""
+        try:
+            self.branch_manager.ensure_main_up_to_date()
+        except BranchSyncError as e:
+            return TaskResult(fatal=True, message=str(e))
+
+        try:
+            self.branch_manager.checkout_or_create(branch, self.config.resume)
+        except BranchExistsError as e:
+            return TaskResult(fatal=True, message=str(e))
+
+        branch_status = self.branch_manager.checkout_or_create(branch, self.config.resume)
+
+        try:
+            prompt = PromptBuilder.coder_prompt(task, coder, prd, resume=branch_status.had_commits)
+            success = self.ai_runner.run_coder(coder, prompt, self.config.repo_dir)
+        except Exception as e:
+            self.logger.error(f"Coder failed: {e}")
+            return TaskResult(fatal=True, message=str(e))
+
+        if not success:
+            return TaskResult(fatal=True, message="Coder execution failed")
+
+        self.precommit_gate.run(task, prd, self.config.repo_dir)
+
+        self.test_runner.run(task, prd)
+
+        try:
+            self.branch_manager.push_branch(branch)
+        except subprocess.CalledProcessError as e:
+            return TaskResult(fatal=True, message=f"Push failed: {e}")
+
+        self.logger.info("Waiting for CI...")
+        try:
+            self.ci_poller.wait_and_fix(task, pr_info.number, branch, prd)
+        except (CITimeoutError, CIFailedFatal) as e:
+            self.logger.error(f"CI failed: {e}")
+            self.pr_manager.close(pr_info.number, f"CI failed: {e}")
+            return TaskResult(fatal=True, message=str(e))
+
+        try:
+            self.prd_guard.check(pr_info.number)
+        except PRDGuardViolation as e:
+            self.logger.error(f"PRDGuard violation: {e}")
+            self.pr_manager.close(pr_info.number, str(e))
+            raise
+
+        try:
+            self.pr_manager.merge(pr_info.number)
+        except subprocess.CalledProcessError as e:
+            return TaskResult(fatal=True, message=f"Merge failed: {e}")
+
+        self.branch_manager.merge_and_cleanup(branch)
+
+        now = datetime.now().strftime("%Y-%m-%d")
+        self.task_tracker.append_progress(task["id"], task["title"], pr_info.number, now)
+        self.task_tracker.mark_complete(task["id"])
+
+        try:
+            self.task_tracker.commit_tracking(task["id"], task["title"])
+        except subprocess.CalledProcessError as e:
+            self.logger.warn(f"Tracking commit failed: {e}")
+
+        return TaskResult(fatal=False)
+
+    def _run_task_tdd(
+        self,
+        task: dict,
+        branch: str,
+        prd: dict,
+        coder: str,
+        reviewer: str,
+        pr_info: PRInfo,
+    ) -> TaskResult:
+        """TDD mode: write tests -> quality check -> code -> rest of standard flow."""
+        self.logger.info("TDD mode: writing tests...")
+
+        test_file = self.test_writer.write_tests(task, self.config.repo_dir)
+
+        quality_result = self.test_quality_checker.run(task, test_file, self.test_writer)
+
+        if not quality_result.passed:
+            msg = (
+                f"Test quality failed after "
+                f"{self.config.max_test_write_rounds} rounds: "
+                f"{quality_result.deterministic_issues + quality_result.ai_issues}"
+            )
+            return TaskResult(fatal=True, message=msg)
+
+        return self._run_task_standard(task, branch, prd, coder, reviewer, pr_info)
+
+    def _run_task(
+        self,
+        task: dict,
+        branch: str,
+        prd: dict,
+    ) -> TaskResult:
+        """Execute a single task."""
+        coder, reviewer, _ = self.ai_runner.assign_agents(task)
+
+        pr_body = PromptBuilder.pr_body(task)
+
+        try:
+            existing = self.pr_manager.get_existing(branch)
+            if existing:
+                self.logger.info(f"Resuming existing PR #{existing.number}")
+                pr_info = existing
+            else:
+                pr_info = self.pr_manager.create(branch, task["title"], pr_body)
+        except subprocess.CalledProcessError as e:
+            return TaskResult(fatal=True, message=f"PR creation failed: {e}")
+
+        if self.config.tdd_mode:
+            return self._run_task_tdd(task, branch, prd, coder, reviewer, pr_info)
+
+        return self._run_task_standard(task, branch, prd, coder, reviewer, pr_info)
+
+    def run(self, max_iterations: int) -> None:
+        """Main loop: preflight, get next task, run until stop or max."""
+        prd = self.task_tracker.load()
+
+        try:
+            self._preflight(prd)
+        except PreflightError as e:
+            self.logger.fatal(f"Preflight failed: {e}")
+
+        prd = self.task_tracker.load()
+
+        for iteration in range(1, max_iterations + 1):
+            task = self.task_tracker.get_next_task()
+
+            stop_reason = self._check_stop_conditions(task)
+            if stop_reason:
+                self.logger.info(f"Stopping: {stop_reason}")
+                self.logger.info("Loop finished.")
+                return
+
+            self.logger.info(
+                f"Iteration {iteration}/{max_iterations}: {task['id']} {task['title']}"
+            )
+
+            branch = f"ralph/{task['id']}-{self.branch_manager.sanitise_branch_name(task['title'])}"
+
+            result = self._run_task(task, branch, prd)
+
+            if result.fatal:
+                self.logger.error(f"Task failed: {result.message}")
+                self.logger.info("Loop stopped due to fatal error.")
+                return
+
+            prd = self.task_tracker.load()
+
+        self.logger.info(f"Max iterations ({max_iterations}) reached.")
+        self.logger.info("Loop finished.")
+
+
 def main() -> int:
-    print("ralph.py — skeleton implemented. See roadmap.md.")
     return 0
 
 
