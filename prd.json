@@ -1179,7 +1179,7 @@
         "tests/test_conflict_detector.py: error raised if wave with conflicts attempted execution"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [
         "M5-01"
       ],
