@@ -179,6 +179,7 @@ class Config:
     claude_only: bool = False
     gemini_only: bool = False
     opencode_only: bool = False
+    validate_plan: bool = False  # Tier 2 AI sanity check on prd.json
 
 
 @dataclass
@@ -1129,11 +1130,14 @@ class PlanChecker:
         if errors:
             raise PlanInvalidError("\n".join(errors))
 
-        # ai_check (M2 feature) produces warnings only
         warnings = []
         if ai_check:
-            # warnings = self.ai_runner.check_ai(prd["tasks"])
-            pass
+            pending_tasks = [t for t in prd.get("tasks", []) if not t.get("completed")]
+            if pending_tasks:
+                prompt = PromptBuilder.plan_check_prompt(pending_tasks)
+                ai_response = self.ai_runner.run_reviewer("gemini", prompt)
+                if ai_response:
+                    warnings = self._parse_warnings(ai_response)
 
         decompositions = self.auto_decompose(prd)
 
@@ -1144,6 +1148,15 @@ class PlanChecker:
             tasks_checked=sum(1 for t in prd.get("tasks", []) if not t.get("completed")),
             decompositions=decompositions,
         )
+
+    def _parse_warnings(self, ai_response: str) -> list[str]:
+        """Parse [WARN] task_id: reason lines from AI response."""
+        warnings = []
+        for line in ai_response.splitlines():
+            match = re.match(r"\[WARN\]\s+(\S+):\s+(.+)", line)
+            if match:
+                warnings.append(f"{match.group(1)}: {match.group(2)}")
+        return warnings
 
 
 class BranchManager:
@@ -2379,7 +2392,9 @@ class Orchestrator:
             )
 
         try:
-            self.plan_checker.run(prd)
+            check_result = self.plan_checker.run(prd, ai_check=self.config.validate_plan)
+            for warning in check_result.warnings:
+                self.logger.warn(f"[AI Plan Check] {warning}")
         except PlanInvalidError as e:
             raise PreflightError(f"Plan validation failed: {e}") from e
 
@@ -2792,6 +2807,7 @@ def run(
         claude_only=claude_only,
         gemini_only=gemini_only,
         opencode_only=opencode_only,
+        validate_plan=validate_plan,
     )
 
     logger = RalphLogger(log_file)
