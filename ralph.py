@@ -1848,7 +1848,10 @@ class Orchestrator:
             )
             self._nested_claude_warning_issued = True
 
-        self.branch_manager.verify_ssh_remote()
+        try:
+            self.branch_manager.verify_ssh_remote()
+        except RemoteNotSSHError as e:
+            raise PreflightError(f"SSH remote check failed: {e}") from e
 
         result = self.runner.run(
             ["git", "diff", "--quiet", f"origin/{MAIN_BRANCH}", "--", PRD_FILE],
@@ -1862,7 +1865,7 @@ class Orchestrator:
         try:
             self.plan_checker.run(prd)
         except PlanInvalidError as e:
-            raise PreflightError(f"Plan validation failed: {e}")
+            raise PreflightError(f"Plan validation failed: {e}") from e
 
         self.logger.info("Preflight passed.")
 
