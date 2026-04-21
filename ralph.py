@@ -51,6 +51,9 @@ PROGRESS_FILE = "progress.txt"
 SUMMARY_FILE_PREFIX = "ralph-summary"
 DEFAULT_OPENCODE_MODEL = "opencode/kimi-k2.5"
 GEMINI_MODEL = "gemini-2.5-pro"
+ESCALATIONS_FILE = ".ralph/escalations.json"
+MAX_RETRIES_PER_BLOCKER = 3
+MAX_TOTAL_BLOCKERS_PER_SPRINT = 5
 
 
 # --- Exception Hierarchy ---
@@ -2146,6 +2149,203 @@ class BlockerAnalyser:
             if len(line.strip()) > 10:
                 return line.strip()[:200]
         return default
+
+
+class EscalationManager:
+    """
+    Circuit breaker that prevents infinite retry loops.
+
+    Tracks consecutive failures per BlockerKind and total blocker events
+    per sprint. Triggers escalation when:
+      - consecutive failures for one blocker kind reach max_retries_per_blocker (default 3)
+      - total blocker events for the sprint reach max_total_blockers (default 5)
+
+    Escalation actions:
+      1. Emits a loud console alert via click.echo
+      2. Writes escalation-{timestamp}.md with full context
+      3. Appends an entry to .ralph/escalations.json (failure ledger)
+      4. Creates a human-owned REVIEW task via TaskTracker
+    """
+
+    def __init__(
+        self,
+        repo_dir: Path,
+        task_tracker: "TaskTracker",
+        logger: RalphLogger,
+        max_retries_per_blocker: int = MAX_RETRIES_PER_BLOCKER,
+        max_total_blockers: int = MAX_TOTAL_BLOCKERS_PER_SPRINT,
+    ):
+        self.repo_dir = repo_dir
+        self.task_tracker = task_tracker
+        self.logger = logger
+        self.max_retries_per_blocker = max_retries_per_blocker
+        self.max_total_blockers = max_total_blockers
+        # consecutive failure count per blocker kind name
+        self._consecutive_failures: dict[str, int] = {}
+        # total blocker events recorded this sprint
+        self._total_blockers: int = 0
+
+    def record_failure(self, blocker_kind: BlockerKind) -> None:
+        """Record a failure event for blocker_kind and increment sprint total."""
+        kind_name = blocker_kind.name
+        self._consecutive_failures[kind_name] = self._consecutive_failures.get(kind_name, 0) + 1
+        self._total_blockers += 1
+
+    def reset_consecutive(self, blocker_kind: BlockerKind) -> None:
+        """Reset the consecutive counter for blocker_kind (call after a success)."""
+        self._consecutive_failures[blocker_kind.name] = 0
+
+    def should_escalate(self, blocker_kind: BlockerKind) -> bool:
+        """Return True if circuit breaker should trip for this blocker kind."""
+        consecutive = self._consecutive_failures.get(blocker_kind.name, 0)
+        if consecutive >= self.max_retries_per_blocker:
+            return True
+        if self._total_blockers >= self.max_total_blockers:
+            return True
+        return False
+
+    def escalate(self, task: dict, blocker: BlockerResult, context: str) -> None:
+        """
+        Execute full escalation sequence for a stuck task.
+
+        Args:
+            task: The prd.json task dict that is stuck.
+            blocker: The classified BlockerResult.
+            context: Human-readable failure context string.
+        """
+        timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+        task_id = task.get("id", "unknown")
+        kind_name = (
+            blocker.kind.name if isinstance(blocker.kind, BlockerKind) else str(blocker.kind)
+        )
+        consecutive = self._consecutive_failures.get(kind_name, 0)
+
+        # 1. Loud console alert
+        separator = "=" * 60
+        alert = (
+            f"\n{separator}\n"
+            f"[ESCALATION] Task {task_id} — {kind_name}\n"
+            f"Consecutive failures: {consecutive} / {self.max_retries_per_blocker}\n"
+            f"Total sprint blockers: {self._total_blockers} / {self.max_total_blockers}\n"
+            f"Context: {context[:200]}\n"
+            f"{separator}\n"
+        )
+        click.echo(alert, err=True)
+        self.logger.error(f"[EscalationManager] Escalating {task_id}: {kind_name}")
+
+        # 2. Write escalation markdown
+        md_path = self.repo_dir / f"escalation-{timestamp}.md"
+        md_content = self._build_markdown(task, blocker, context, timestamp, consecutive)
+        md_path.write_text(md_content, encoding="utf-8")
+        self.logger.info(f"[EscalationManager] Wrote {md_path.name}")
+
+        # 3. Append to failure ledger
+        self._append_to_ledger(task, blocker, context, timestamp, consecutive)
+
+        # 4. Create human-owned REVIEW task
+        self._create_review_task(task)
+
+    def _build_markdown(
+        self,
+        task: dict,
+        blocker: BlockerResult,
+        context: str,
+        timestamp: str,
+        consecutive: int,
+    ) -> str:
+        task_id = task.get("id", "unknown")
+        kind_name = (
+            blocker.kind.name if isinstance(blocker.kind, BlockerKind) else str(blocker.kind)
+        )
+        lines = [
+            f"# Escalation Report — {task_id}",
+            "",
+            f"**Timestamp**: {timestamp}",
+            f"**Blocker kind**: {kind_name}",
+            f"**Task ID**: {task_id}",
+            f"**Task title**: {task.get('title', 'Untitled')}",
+            f"**Consecutive failures**: {consecutive}",
+            f"**Total sprint blockers**: {self._total_blockers}",
+            "",
+            "## Context",
+            "",
+            context,
+            "",
+            "## Task Description",
+            "",
+            task.get("description", ""),
+            "",
+            "## Acceptance Criteria",
+            "",
+        ]
+        for ac in task.get("acceptance_criteria", []):
+            lines.append(f"- {ac}")
+        lines.append("")
+        return "\n".join(lines)
+
+    def _append_to_ledger(
+        self,
+        task: dict,
+        blocker: BlockerResult,
+        context: str,
+        timestamp: str,
+        consecutive: int,
+    ) -> None:
+        ledger_path = self.repo_dir / ESCALATIONS_FILE
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+
+        ledger: list[dict] = []
+        if ledger_path.exists():
+            try:
+                with ledger_path.open("r", encoding="utf-8") as f:
+                    ledger = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                ledger = []
+
+        kind_name = (
+            blocker.kind.name if isinstance(blocker.kind, BlockerKind) else str(blocker.kind)
+        )
+        entry = {
+            "timestamp": timestamp,
+            "task_id": task.get("id", "unknown"),
+            "task_title": task.get("title", "Untitled"),
+            "blocker_kind": kind_name,
+            "consecutive_failures": consecutive,
+            "total_sprint_blockers": self._total_blockers,
+            "context": context[:500],
+        }
+        ledger.append(entry)
+
+        with ledger_path.open("w", encoding="utf-8") as f:
+            json.dump(ledger, f, indent=2)
+        self.logger.info(f"[EscalationManager] Updated ledger: {ESCALATIONS_FILE}")
+
+    def _create_review_task(self, task: dict) -> None:
+        prd = self.task_tracker.load()
+        tasks = prd.get("tasks", [])
+        max_epic = 0
+        for t in tasks:
+            tid = t.get("id", "")
+            match = re.match(r"^M(\d+)", tid)
+            if match:
+                max_epic = max(max_epic, int(match.group(1)))
+
+        task_id = task.get("id", "unknown")
+        review_task = {
+            "id": f"M{max_epic + 1}-ESC",
+            "title": f"REVIEW: {task.get('title', 'Untitled')} (escalated)",
+            "description": (
+                f"Human review required. EscalationManager triggered for task {task_id}. "
+                f"Original description: {task.get('description', '')}"
+            ),
+            "acceptance_criteria": task.get("acceptance_criteria", []),
+            "owner": "human",
+            "completed": False,
+            "depends_on": [],
+            "epic": task.get("epic", f"M{max_epic}"),
+        }
+        self.task_tracker.add_task(review_task)
+        self.logger.info(f"[EscalationManager] Created REVIEW task: {review_task['id']}")
 
 
 class PromptBuilder:
