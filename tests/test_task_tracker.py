@@ -167,12 +167,66 @@ def test_mark_complete_already_done(tmp_path):
         tracker.mark_complete("T1")
 
 
-def test_append_progress(tmp_path):
-    progress_file = tmp_path / "progress.txt"
-    tracker = TaskTracker(tmp_path / "prd.json", progress_file, MagicMock(), MagicMock())
+def test_append_progress_writes_human_readable_format(tmp_path):
+    prd_file = tmp_path / "prd.json"
+    prd_data = {"tasks": [{"id": "M1-01", "epic": "M1", "title": "Test task", "completed": True}]}
+    prd_file.write_text(json.dumps(prd_data))
 
-    tracker.append_progress("T1", "Title", 123, "2026-04-20")
-    assert progress_file.read_text() == "2026-04-20 | T1 | Title | PR #123\n"
+    progress_file = tmp_path / "progress.txt"
+    tracker = TaskTracker(prd_file, progress_file, MagicMock(), MagicMock())
+
+    tracker.append_progress(
+        "M1-01", "Test task", 123, "2026-04-20", sprint_start_date="2026-04-20", iteration_count=1
+    )
+
+    content = progress_file.read_text()
+    assert "| Epic | Task ID | Title | Status | Completed | PR |" in content
+    assert "| M1 | M1-01 | Test task" in content
+    assert "✓" in content
+    assert "#123" in content
+    assert "Sprint Start" in content
+    assert "Iteration" in content
+
+
+def test_symbols_correct_for_completed_tasks(tmp_path):
+    prd_file = tmp_path / "prd.json"
+    prd_data = {
+        "tasks": [
+            {"id": "T1", "epic": "M1", "title": "Done", "completed": True},
+            {"id": "T2", "epic": "M1", "title": "Escalated", "completed": True, "escalated": True},
+            {"id": "T3", "epic": "M1", "title": "Pending", "completed": False},
+        ]
+    }
+    prd_file.write_text(json.dumps(prd_data))
+
+    progress_file = tmp_path / "progress.txt"
+    tracker = TaskTracker(prd_file, progress_file, MagicMock(), MagicMock())
+
+    tracker.append_progress(
+        "T3", "Pending", 0, "2026-04-20", sprint_start_date="2026-04-20", iteration_count=1
+    )
+
+    content = progress_file.read_text()
+    assert content.count("✓") == 1
+    assert content.count("⚠") == 1
+    assert content.count("⏸") == 1
+
+
+def test_header_includes_sprint_metadata(tmp_path):
+    prd_file = tmp_path / "prd.json"
+    prd_data = {"tasks": []}
+    prd_file.write_text(json.dumps(prd_data))
+
+    progress_file = tmp_path / "progress.txt"
+    tracker = TaskTracker(prd_file, progress_file, MagicMock(), MagicMock())
+
+    tracker.append_progress(
+        "T1", "Title", 1, "2026-04-21", sprint_start_date="2026-04-20", iteration_count=5
+    )
+
+    content = progress_file.read_text()
+    assert "**Sprint Start**: 2026-04-20" in content
+    assert "**Iteration**: 5" in content
 
 
 def test_add_task(tmp_path):
