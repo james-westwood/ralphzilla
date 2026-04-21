@@ -770,11 +770,11 @@ Do NOT re-implement work that is already committed.
 
 ## Contributions from Production Experience (playchitect, 2026-04-20)
 
-### 8. `AIRunner` — nested Claude session detection
+### 8. `AIRunner` — nested Claude subprocess detection
 
-**Lesson:** `env_removals=["CLAUDECODE"]` is not sufficient. When `claude --print` is called as a subprocess from inside a Claude Code session, it exits 0 but produces no review output and posts nothing. The root cause is that the Claude CLI detects it is being invoked inside an existing Claude Code process and silently no-ops, regardless of whether `CLAUDECODE` is unset.
+**Lesson:** When `claude --print` is called as a subprocess from inside a Claude Code session, it exits 0 but produces no review output. The Claude CLI silently no-ops when it detects it is already running inside a Claude Code process. This is specific to `claude` as a subprocess — **opencode models (Kimi, Big Pickle, Gemini via opencode) are unaffected and work correctly as reviewers inside a Claude Code session.**
 
-`AIRunner` must detect this at startup and skip the `claude` reviewer path entirely:
+`AIRunner` must skip the `claude` reviewer path when nested, and fall back to an opencode reviewer instead:
 
 ```python
 def _is_nested_claude_session(self) -> bool:
@@ -787,15 +787,15 @@ def run_reviewer(self, agent: str, prompt: str) -> str:
     if agent == "claude" and self._is_nested_claude_session():
         self.log.warn(
             "Nested Claude session detected — claude reviewer unavailable. "
-            "Falling back to gemini."
+            "Falling back to opencode reviewer."
         )
-        return self.run_reviewer("gemini", prompt)
+        return self.run_reviewer("opencode", prompt)
     ...
 ```
 
-`Orchestrator._preflight()` should also log a prominent warning if `CLAUDECODE` is set, so the operator knows review fallback is active.
+`Orchestrator._preflight()` should log a prominent warning if `CLAUDECODE` is set, so the operator knows the claude reviewer path is inactive and an opencode reviewer is in use.
 
-The Scrum Master should default to `--skip-review` when it detects it is itself running inside Claude Code, and note this in the session log.
+**The Scrum Master should NOT default to `--skip-review` inside Claude Code.** Instead, use `--opencode-only` to route both coder and reviewer through opencode (e.g. Big Pickle codes, Kimi reviews). `--skip-review` is only appropriate when all reviewer backends are simultaneously unavailable.
 
 ---
 
