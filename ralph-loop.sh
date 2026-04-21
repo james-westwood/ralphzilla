@@ -87,8 +87,8 @@ text = sys.stdin.read()
 
 # Strip all ANSI/VT escape sequences (CSI, OSC, etc.)
 text = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', text)   # CSI sequences e.g. \x1b[0m
-text = re.sub(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)', '', text)  # OSC sequences
-text = re.sub(r'\x1b[@-Z\\-_]', '', text)              # Fe sequences
+text = re.sub(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\x5c)', '', text)  # OSC sequences (end with BEL or ESC \)
+text = re.sub(r'\x1b[@-A-Z\x5c-_]', '', text)         # Fe sequences
 
 # Remove opencode UI / tool-call lines
 ui_prefixes = ('> build', '> session', '> task')
