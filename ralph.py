@@ -160,6 +160,128 @@ class PrdValidator:
                 raise PlanInvalidError(f"{task_id}: depends_on unknown task '{dep_id}'")
 
 
+class DependencyCycleError(RalphError):
+    """Circular dependency detected in task graph."""
+
+    pass
+
+
+class DependencyGraph:
+    """Builds and queries a DAG from task depends_on fields.
+
+    Used to determine execution order and detect which tasks can run concurrently.
+    Internally uses an adjacency list where edges point from dependency → dependent
+    (i.e., A → B means A must complete before B).
+    """
+
+    def __init__(self) -> None:
+        self._graph: dict[str, list[str]] = {}  # node -> list of nodes that depend on it
+        self._reverse: dict[str, list[str]] = {}  # node -> list of its dependencies
+        self._task_ids: set[str] = set()  # IDs explicitly declared as tasks
+
+    def build_graph(self, tasks: list[dict]) -> None:
+        """Parse tasks and populate the adjacency lists."""
+        self._graph = {}
+        self._reverse = {}
+        self._task_ids = set()
+
+        for task in tasks:
+            task_id = task["id"]
+            self._task_ids.add(task_id)
+            self._graph.setdefault(task_id, [])
+            self._reverse.setdefault(task_id, [])
+
+        for task in tasks:
+            task_id = task["id"]
+            for dep_id in task.get("depends_on", []):
+                self._graph.setdefault(dep_id, []).append(task_id)
+                self._reverse[task_id].append(dep_id)
+
+    def validate_dependencies(self) -> list[str]:
+        """Return task IDs referenced in depends_on that don't exist in the task list."""
+        missing: list[str] = []
+        for node, deps in self._reverse.items():
+            for dep in deps:
+                if dep not in self._task_ids and dep not in missing:
+                    missing.append(dep)
+        return missing
+
+    def detect_cycles(self) -> bool:
+        """Return True if the graph contains a cycle (DFS-based)."""
+        white, gray, black = 0, 1, 2
+        color: dict[str, int] = {node: white for node in self._graph}
+
+        def dfs(node: str) -> bool:
+            color[node] = gray
+            for neighbor in self._graph.get(node, []):
+                if color.get(neighbor, white) == gray:
+                    return True
+                if color.get(neighbor, white) == white and dfs(neighbor):
+                    return True
+            color[node] = black
+            return False
+
+        return any(dfs(node) for node in self._graph if color[node] == white)
+
+    def topological_sort(self) -> list[str]:
+        """Return task IDs in a valid execution order (dependencies first).
+
+        Raises DependencyCycleError if a cycle is present.
+        """
+        if self.detect_cycles():
+            cycle_nodes = self._find_cycle_nodes()
+            raise DependencyCycleError(
+                f"Cycle detected among tasks: {', '.join(sorted(cycle_nodes))}"
+            )
+
+        # Kahn's algorithm (BFS topological sort)
+        in_degree: dict[str, int] = {node: 0 for node in self._graph}
+        for node in self._graph:
+            for neighbor in self._graph[node]:
+                in_degree[neighbor] = in_degree.get(neighbor, 0) + 1
+
+        queue = [node for node, deg in in_degree.items() if deg == 0]
+        queue.sort()  # deterministic output
+        result: list[str] = []
+
+        while queue:
+            node = queue.pop(0)
+            result.append(node)
+            neighbors = sorted(self._graph.get(node, []))
+            for neighbor in neighbors:
+                in_degree[neighbor] -= 1
+                if in_degree[neighbor] == 0:
+                    queue.append(neighbor)
+                    queue.sort()
+
+        return result
+
+    def _find_cycle_nodes(self) -> set[str]:
+        """Return the set of node IDs that participate in any cycle."""
+        white, gray, black = 0, 1, 2
+        color: dict[str, int] = {node: white for node in self._graph}
+        cycle_nodes: set[str] = set()
+
+        def dfs(node: str, path: list[str]) -> None:
+            color[node] = gray
+            path.append(node)
+            for neighbor in self._graph.get(node, []):
+                if color.get(neighbor, white) == gray:
+                    # found a back-edge: record the cycle
+                    idx = path.index(neighbor)
+                    cycle_nodes.update(path[idx:])
+                elif color.get(neighbor, white) == white:
+                    dfs(neighbor, path)
+            path.pop()
+            color[node] = black
+
+        for node in self._graph:
+            if color[node] == white:
+                dfs(node, [])
+
+        return cycle_nodes
+
+
 class AgentSandboxViolation(RalphError):  # noqa: N818
     """Agent attempted an operation outside its sandbox."""
 
