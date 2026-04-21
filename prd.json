@@ -911,7 +911,7 @@
         "All existing tests pass with new coverage configuration"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [],
       "epic": "M2"
     },
