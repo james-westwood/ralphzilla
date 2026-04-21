@@ -928,7 +928,7 @@
         "tests/test_validate_plan.py: test_flag_triggers_ai_validation, test_warn_format_parsed_correctly, test_warnings_logged_but_do_not_block, test_no_ai_call_when_flag_false"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [
         "M1-05",
         "M1-09",
