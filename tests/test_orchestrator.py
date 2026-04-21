@@ -147,7 +147,7 @@ class TestPreflight:
             or MagicMock(returncode=0)
         )
         orch.plan_checker = MagicMock(spec=PlanChecker)
-        orch.plan_checker.run = lambda prd: call_order.append(("plan_check_run",))
+        orch.plan_checker.run = lambda prd, ai_check=False: call_order.append(("plan_check_run",))
 
         try:
             orch._preflight({})
