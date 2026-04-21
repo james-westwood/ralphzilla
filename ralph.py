@@ -14,6 +14,7 @@ Run with --help for full option list.
 """
 
 import ast
+import asyncio
 import enum
 import json
 import os
@@ -21,6 +22,7 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -324,6 +326,7 @@ class Config:
     gemini_only: bool = False
     opencode_only: bool = False
     validate_plan: bool = False  # Tier 2 AI sanity check on prd.json
+    max_workers: int | None = None  # WaveExecutor parallelism cap (None = CPU count)
 
 
 @dataclass
@@ -366,6 +369,151 @@ class BranchStatus:
 class TaskResult:
     fatal: bool
     message: str = ""
+
+
+@dataclass
+class ExecutionReport:
+    """Summary of a parallel wave execution run."""
+
+    results: dict[str, TaskResult]  # task_id -> TaskResult
+    waves_run: int
+    tasks_blocked: list[str] = field(default_factory=list)  # IDs skipped due to failed deps
+
+
+class WaveExecutor:
+    """Executes tasks in dependency-ordered waves with asyncio concurrency.
+
+    Uses DependencyGraph to group tasks into waves where all dependencies of
+    every task in a wave are satisfied by earlier waves.  Tasks within a wave
+    are run concurrently via asyncio.gather(); a semaphore caps parallelism to
+    max_workers.
+
+    A task_runner callable is injected at construction time so that the class
+    is fully unit-testable without touching real git / AI infrastructure.  The
+    runner may be a plain sync function or an async coroutine function — both
+    are supported.
+    """
+
+    def __init__(
+        self,
+        tasks: list[dict],
+        task_runner: Callable[[str], TaskResult] | None = None,
+        max_workers: int | None = None,
+    ) -> None:
+        self._tasks: dict[str, dict] = {t["id"]: t for t in tasks}
+        self._graph = DependencyGraph()
+        self._graph.build_graph(tasks)
+        self._task_runner: Callable[[str], TaskResult] = task_runner or self._default_runner
+        self._max_workers: int = max_workers or os.cpu_count() or 4
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def build_waves(self, task_ids: list[str]) -> list[list[str]]:
+        """Group task_ids into sequentially-ordered waves.
+
+        Wave 0 contains tasks with no intra-list dependencies.  Wave N
+        contains tasks whose dependencies are all satisfied by waves < N.
+        Dependencies on task IDs *outside* task_ids are treated as already
+        satisfied (completed externally).
+        """
+        task_id_set = set(task_ids)
+        completed: set[str] = set()
+        remaining = list(task_ids)
+        waves: list[list[str]] = []
+
+        while remaining:
+            ready = sorted(
+                tid
+                for tid in remaining
+                if all(
+                    dep not in task_id_set or dep in completed
+                    for dep in self._tasks.get(tid, {}).get("depends_on", [])
+                )
+            )
+            if not ready:
+                # Unresolvable subset (cycle or missing deps) — emit as a
+                # final wave so callers get all task IDs back.
+                waves.append(sorted(remaining))
+                break
+            waves.append(ready)
+            completed.update(ready)
+            remaining = [tid for tid in remaining if tid not in set(ready)]
+
+        return waves
+
+    def execute_wave(self, wave: list[str]) -> dict[str, TaskResult]:
+        """Run all tasks in *wave* concurrently and return their results.
+
+        Uses asyncio.gather() with a semaphore capped at max_workers.
+        """
+        return asyncio.run(self._execute_wave_async(wave))
+
+    def run_parallel(self, tasks: list[dict]) -> ExecutionReport:
+        """Execute all tasks across dependency-ordered waves.
+
+        Failed tasks in a wave do not prevent other tasks in that wave from
+        running, but they block any dependent tasks in future waves.
+        """
+        task_ids = [t["id"] for t in tasks]
+        waves = self.build_waves(task_ids)
+        all_results: dict[str, TaskResult] = {}
+        failed_ids: set[str] = set()
+        blocked_ids: list[str] = []
+
+        for wave in waves:
+            runnable: list[str] = []
+            for tid in wave:
+                deps = self._tasks.get(tid, {}).get("depends_on", [])
+                if any(dep in failed_ids for dep in deps):
+                    blocked_ids.append(tid)
+                    all_results[tid] = TaskResult(fatal=True, message="blocked: dependency failed")
+                else:
+                    runnable.append(tid)
+
+            # Blocked tasks are also failures for dependency propagation
+            failed_ids.update(blocked_ids)
+
+            if runnable:
+                wave_results = self.execute_wave(runnable)
+                all_results.update(wave_results)
+                for tid, result in wave_results.items():
+                    if result.fatal:
+                        failed_ids.add(tid)
+
+        return ExecutionReport(
+            results=all_results,
+            waves_run=len(waves),
+            tasks_blocked=blocked_ids,
+        )
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _default_runner(task_id: str) -> TaskResult:  # pragma: no cover
+        """Placeholder runner — callers should inject a real runner."""
+        return TaskResult(fatal=False, message=f"noop:{task_id}")
+
+    async def _execute_wave_async(self, wave: list[str]) -> dict[str, TaskResult]:
+        semaphore = asyncio.Semaphore(self._max_workers)
+        coros = [self._run_with_semaphore(tid, semaphore) for tid in wave]
+        pairs = await asyncio.gather(*coros)
+        return dict(pairs)
+
+    async def _run_with_semaphore(
+        self, task_id: str, semaphore: asyncio.Semaphore
+    ) -> tuple[str, TaskResult]:
+        async with semaphore:
+            runner = self._task_runner
+            if asyncio.iscoroutinefunction(runner):
+                result = await runner(task_id)
+            else:
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(None, runner, task_id)
+            return task_id, result
 
 
 @dataclass
@@ -4231,6 +4379,13 @@ def cli():
     default=None,
     help="Repo root (default: directory containing ralph.py)",
 )
+@click.option(
+    "--max-workers",
+    "max_workers",
+    default=None,
+    type=int,
+    help="Max parallel tasks in a wave (default: CPU count)",
+)
 def run(
     max_iterations: int,
     skip_review: bool,
@@ -4248,6 +4403,7 @@ def run(
     deep_review_check: bool,
     dry_run: bool,
     repo_dir: Path | None,
+    max_workers: int | None,
 ) -> int:
     """Run the AI sprint loop."""
     if repo_dir is None:
@@ -4275,6 +4431,7 @@ def run(
         gemini_only=gemini_only,
         opencode_only=opencode_only,
         validate_plan=validate_plan,
+        max_workers=max_workers,
     )
 
     logger = RalphLogger(log_file)
