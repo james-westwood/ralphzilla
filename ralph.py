@@ -3487,8 +3487,49 @@ exit 0
     return 0
 
 
+def _extract_milestone_spec(file_path: Path, milestone: str | None) -> str:
+    """Extract spec text from a roadmap file.
+
+    If milestone is given (e.g. 'M4'), finds the section '## Milestone 4'
+    and extracts its unticked '- [ ]' deliverables plus the Goal line.
+    If milestone is None, finds the first section that has unticked items.
+    """
+    content = file_path.read_text()
+    sections = re.split(r"(?=^## Milestone)", content, flags=re.MULTILINE)
+
+    target = None
+    if milestone:
+        # Normalise: "M4" → "4", "Milestone 4" → "4"
+        num = re.sub(r"[^\d]", "", milestone)
+        for section in sections:
+            if re.match(rf"## Milestone {num}\b", section):
+                target = section
+                break
+        if target is None:
+            raise click.BadParameter(f"Milestone '{milestone}' not found in {file_path}")
+    else:
+        for section in sections:
+            if "- [ ]" in section:
+                target = section
+                break
+        if target is None:
+            raise click.UsageError(f"No unticked items found in {file_path}")
+
+    # Pull Goal line and unticked deliverables
+    lines = target.splitlines()
+    header = lines[0] if lines else ""
+    goal_line = next((line for line in lines if line.startswith("**Goal**")), "")
+    unticked = [line for line in lines if line.strip().startswith("- [ ]")]
+
+    if not unticked:
+        raise click.UsageError(f"No unticked items in {header} — nothing to add")
+
+    return "\n".join([header, goal_line, "", "Deliverables:"] + unticked)
+
+
 @cli.command("add")
 @click.argument("spec")
+@click.argument("milestone", required=False, default=None)
 @click.option(
     "--repo-dir",
     "repo_dir",
@@ -3498,15 +3539,32 @@ exit 0
 )
 def add(
     spec: str,
+    milestone: str | None,
     repo_dir: Path | None,
 ) -> int:
-    """Add tasks from a natural language spec or GitHub issue URL.
+    """Add tasks from a natural language spec, roadmap file, or GitHub issue URL.
 
-    SPEC: A natural language description of the task(s) to add, or a
-    GitHub issue URL like https://github.com/user/repo/issues/123
+    SPEC: A natural language description, a path to a roadmap .md file,
+    or a GitHub issue URL like https://github.com/user/repo/issues/123
+
+    MILESTONE: Optional milestone name to target in a roadmap file (e.g. M4).
+    If omitted when SPEC is a file, uses the first section with unticked items.
+
+    Examples:
+      rzilla add roadmap.md M4
+      rzilla add roadmap.md
+      rzilla add "Build a login page with OAuth"
     """
     if repo_dir is None:
         repo_dir = Path(__file__).parent.resolve()
+
+    # If SPEC is an existing file path, extract the milestone spec from it
+    spec_path = Path(spec)
+    if spec_path.exists() and spec_path.is_file():
+        spec = _extract_milestone_spec(spec_path, milestone)
+        print(f"Extracted spec from {spec_path.name}:\n{spec}\n")
+    elif milestone:
+        raise click.UsageError("MILESTONE argument only valid when SPEC is a roadmap file")
 
     log_file = repo_dir / LOG_FILE_NAME
     logger = RalphLogger(log_file)
