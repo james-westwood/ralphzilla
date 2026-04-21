@@ -25,6 +25,7 @@ from datetime import datetime
 from pathlib import Path
 
 import click
+import yaml
 
 # --- Constants ---
 
@@ -46,6 +47,7 @@ MAIN_BRANCH = "main"
 LOG_FILE_NAME = "ralph.log"
 PRD_FILE = "prd.json"
 PROGRESS_FILE = "progress.txt"
+SUMMARY_FILE_PREFIX = "ralph-summary"
 DEFAULT_OPENCODE_MODEL = "opencode/kimi-k2.5"
 GEMINI_MODEL = "gemini-2.5-pro"
 
@@ -258,6 +260,18 @@ class CleanExitResult:
 class ReviewQualityResult:
     acceptable: bool
     reason: str  # why it failed quality check (if it did)
+
+
+@dataclass
+class TaskExecutionResult:
+    task_id: str
+    title: str
+    pr_number: int | None
+    ci_passed: bool
+    ci_rounds_used: int
+    escalated: bool
+    fatal_error_type: str | None
+    fatal_error_reason: str | None
 
 
 @dataclass
@@ -2484,6 +2498,10 @@ class Orchestrator:
 
         self._nested_claude_warning_issued = False
 
+        self._sprint_start_time: datetime | None = None
+        self._task_results: list[TaskExecutionResult] = []
+        self._iterations_consumed: int = 0
+
     def _check_cli(self, cmd: str) -> bool:
         """Check if a CLI command is available."""
         try:
@@ -2576,6 +2594,18 @@ class Orchestrator:
             self.branch_manager.ensure_main_up_to_date()
         except BranchSyncError as e:
             self.logger.error(f"[_run_task_standard] Step 1 failed: {e}")
+            self._task_results.append(
+                TaskExecutionResult(
+                    task_id=task["id"],
+                    title=task.get("title", "Untitled"),
+                    pr_number=None,
+                    ci_passed=False,
+                    ci_rounds_used=0,
+                    escalated=True,
+                    fatal_error_type="BranchSyncError",
+                    fatal_error_reason=str(e),
+                )
+            )
             return TaskResult(fatal=True, message=str(e))
         self.logger.info("[_run_task_standard] Step 1 complete")
 
@@ -2585,6 +2615,18 @@ class Orchestrator:
             branch_status = self.branch_manager.checkout_or_create(branch, self.config.resume)
         except BranchExistsError as e:
             self.logger.error(f"[_run_task_standard] Step 2 failed: {e}")
+            self._task_results.append(
+                TaskExecutionResult(
+                    task_id=task["id"],
+                    title=task.get("title", "Untitled"),
+                    pr_number=None,
+                    ci_passed=False,
+                    ci_rounds_used=0,
+                    escalated=True,
+                    fatal_error_type="BranchExistsError",
+                    fatal_error_reason=str(e),
+                )
+            )
             return TaskResult(fatal=True, message=str(e))
         self.logger.info("[_run_task_standard] Step 2 complete")
 
@@ -2595,9 +2637,33 @@ class Orchestrator:
             success = self.ai_runner.run_coder(coder, prompt, self.config.repo_dir)
         except Exception as e:
             self.logger.error(f"[_run_task_standard] Step 3 failed: {e}")
+            self._task_results.append(
+                TaskExecutionResult(
+                    task_id=task["id"],
+                    title=task.get("title", "Untitled"),
+                    pr_number=None,
+                    ci_passed=False,
+                    ci_rounds_used=0,
+                    escalated=True,
+                    fatal_error_type="CoderException",
+                    fatal_error_reason=str(e),
+                )
+            )
             return TaskResult(fatal=True, message=str(e))
         if not success:
             self.logger.error("[_run_task_standard] Step 3: CoderFailedError")
+            self._task_results.append(
+                TaskExecutionResult(
+                    task_id=task["id"],
+                    title=task.get("title", "Untitled"),
+                    pr_number=None,
+                    ci_passed=False,
+                    ci_rounds_used=0,
+                    escalated=True,
+                    fatal_error_type="CoderFailedError",
+                    fatal_error_reason="Coder execution failed",
+                )
+            )
             return TaskResult(fatal=True, message="Coder execution failed")
         self.logger.info("[_run_task_standard] Step 3 complete")
 
@@ -2628,6 +2694,18 @@ class Orchestrator:
             self.branch_manager.push_branch(branch)
         except subprocess.CalledProcessError as e:
             self.logger.error(f"[_run_task_standard] Step 6 failed: {e}")
+            self._task_results.append(
+                TaskExecutionResult(
+                    task_id=task["id"],
+                    title=task.get("title", "Untitled"),
+                    pr_number=pr_info.number if pr_info else None,
+                    ci_passed=False,
+                    ci_rounds_used=0,
+                    escalated=True,
+                    fatal_error_type="PushFailed",
+                    fatal_error_reason=str(e),
+                )
+            )
             return TaskResult(fatal=True, message=f"Push failed: {e}")
         self.logger.info("[_run_task_standard] Step 6 complete")
 
@@ -2647,15 +2725,40 @@ class Orchestrator:
 
         # Step 8: CI wait and fix
         self.logger.info("[_run_task_standard] Step 8: CIPoller.wait_and_fix")
+        ci_result: CIResult | None = None
         try:
-            self.ci_poller.wait_and_fix(task, pr_info.number, branch, prd)
+            ci_result = self.ci_poller.wait_and_fix(task, pr_info.number, branch, prd)
         except CIFailedFatal as e:
             self.logger.error("[_run_task_standard] Step 8 failed: CIFailedFatal")
             self.pr_manager.close(pr_info.number, f"CI failed: {e}")
+            self._task_results.append(
+                TaskExecutionResult(
+                    task_id=task["id"],
+                    title=task.get("title", "Untitled"),
+                    pr_number=pr_info.number,
+                    ci_passed=False,
+                    ci_rounds_used=self.config.max_ci_fix_rounds,
+                    escalated=True,
+                    fatal_error_type="CIFailedFatal",
+                    fatal_error_reason=str(e),
+                )
+            )
             return TaskResult(fatal=True, message=str(e))
         except CITimeoutError as e:
             self.logger.error("[_run_task_standard] Step 8 failed: CITimeoutError")
             self.pr_manager.close(pr_info.number, f"CI timeout: {e}")
+            self._task_results.append(
+                TaskExecutionResult(
+                    task_id=task["id"],
+                    title=task.get("title", "Untitled"),
+                    pr_number=pr_info.number,
+                    ci_passed=False,
+                    ci_rounds_used=CI_POLL_MAX_ATTEMPTS,
+                    escalated=True,
+                    fatal_error_type="CITimeoutError",
+                    fatal_error_reason=str(e),
+                )
+            )
             return TaskResult(fatal=True, message=str(e))
         self.logger.info("[_run_task_standard] Step 8 complete")
 
@@ -2666,6 +2769,18 @@ class Orchestrator:
         except PRDGuardViolation as e:
             self.logger.error("[_run_task_standard] Step 9: PRDGuardViolation")
             self.pr_manager.close(pr_info.number, str(e))
+            self._task_results.append(
+                TaskExecutionResult(
+                    task_id=task["id"],
+                    title=task.get("title", "Untitled"),
+                    pr_number=pr_info.number,
+                    ci_passed=True,
+                    ci_rounds_used=0,
+                    escalated=True,
+                    fatal_error_type="PRDGuardViolation",
+                    fatal_error_reason=str(e),
+                )
+            )
             return TaskResult(fatal=True, message=str(e))
         self.logger.info("[_run_task_standard] Step 9 complete")
 
@@ -2675,6 +2790,18 @@ class Orchestrator:
             self.pr_manager.merge(pr_info.number)
         except subprocess.CalledProcessError as e:
             self.logger.error(f"[_run_task_standard] Step 10 failed: {e}")
+            self._task_results.append(
+                TaskExecutionResult(
+                    task_id=task["id"],
+                    title=task.get("title", "Untitled"),
+                    pr_number=pr_info.number,
+                    ci_passed=True,
+                    ci_rounds_used=0,
+                    escalated=True,
+                    fatal_error_type="MergeFailed",
+                    fatal_error_reason=str(e),
+                )
+            )
             return TaskResult(fatal=True, message=f"Merge failed: {e}")
         self.logger.info("[_run_task_standard] Step 10 complete")
 
@@ -2699,6 +2826,20 @@ class Orchestrator:
         self.logger.info("[_run_task_standard] Step 12 complete")
 
         self.logger.info(f"[_run_task_standard] COMPLETE: {task['id']}")
+
+        self._task_results.append(
+            TaskExecutionResult(
+                task_id=task["id"],
+                title=task.get("title", "Untitled"),
+                pr_number=pr_info.number,
+                ci_passed=ci_result.passed if ci_result else True,
+                ci_rounds_used=ci_result.rounds_used if ci_result else 1,
+                escalated=False,
+                fatal_error_type=None,
+                fatal_error_reason=None,
+            )
+        )
+
         return TaskResult(fatal=False)
 
     def _run_task_tdd(
@@ -2755,6 +2896,10 @@ class Orchestrator:
 
     def run(self, max_iterations: int) -> None:
         """Main loop: preflight, get next task, run until stop or max."""
+        self._sprint_start_time = datetime.now()
+        self._task_results = []
+        self._iterations_consumed = 0
+
         prd = self.task_tracker.load()
 
         try:
@@ -2765,6 +2910,7 @@ class Orchestrator:
         prd = self.task_tracker.load()
 
         for iteration in range(1, max_iterations + 1):
+            self._iterations_consumed = iteration
             task = self.task_tracker.get_next_task()
 
             stop_reason = self._check_stop_conditions(task)
@@ -2797,6 +2943,13 @@ class Orchestrator:
         self.logger.info("Sprint complete")
         self.logger.info("Loop finished.")
 
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H%M%S")
+        summary = self._generate_sprint_summary(timestamp)
+        summary_filename = f"{SUMMARY_FILE_PREFIX}-{timestamp}.md"
+        summary_path = self.config.repo_dir / summary_filename
+        summary_path.write_text(summary, encoding="utf-8")
+        self.logger.info(f"Sprint summary written to {summary_filename}")
+
         clean_result = self.loop_supervisor.verify_clean_exit()
 
         completed_count = sum(
@@ -2804,6 +2957,91 @@ class Orchestrator:
         )
 
         self.loop_supervisor.record_run(clean_result, completed_count)
+
+    def _generate_sprint_summary(self, timestamp: str) -> str:
+        """Generate markdown sprint summary report with YAML frontmatter."""
+        sprint_end = datetime.now()
+        sprint_start = self._sprint_start_time or sprint_end
+
+        total_tasks = len(self.task_tracker.load().get("tasks", []))
+        completed_tasks = [
+            t for t in self.task_tracker.load().get("tasks", []) if t.get("completed")
+        ]
+        tasks_completed_count = len(completed_tasks)
+
+        fatal_errors = [r for r in self._task_results if r.escalated]
+        fatal_errors_count = len(fatal_errors)
+
+        if tasks_completed_count > 0:
+            completed_without_escalation = tasks_completed_count - fatal_errors_count
+            readiness_score = int((completed_without_escalation / tasks_completed_count) * 100)
+        else:
+            readiness_score = 100
+
+        runtime_seconds = (sprint_end - sprint_start).total_seconds()
+        hours = int(runtime_seconds // 3600)
+        minutes = int((runtime_seconds % 3600) // 60)
+        seconds = int(runtime_seconds % 60)
+        runtime_str = f"{hours}h {minutes}m {seconds}s"
+
+        frontmatter = {
+            "sprint_start": sprint_start.isoformat(),
+            "sprint_end": sprint_end.isoformat(),
+            "tasks_completed_count": tasks_completed_count,
+            "total_tasks": total_tasks,
+            "fatal_errors_count": fatal_errors_count,
+            "readiness_score_percent": readiness_score,
+        }
+
+        lines = []
+        lines.append("---")
+        lines.append(yaml.dump(frontmatter, default_flow_style=False, sort_keys=False))
+        lines.append("---")
+        lines.append("")
+        lines.append("# Sprint Summary Report")
+        lines.append("")
+
+        lines.append("## Tasks Completed")
+        lines.append("")
+        lines.append("| ID | Title | PR | Status |")
+        lines.append("|---|---|---|---|")
+        for task in completed_tasks:
+            task_id = task.get("id", "UNKNOWN")
+            title = task.get("title", "Untitled")
+            pr_num = task.get("pr_number", "")
+            status = "merged"
+            lines.append(f"| {task_id} | {title} | #{pr_num} | {status} |")
+        lines.append("")
+
+        lines.append("## CI Results")
+        lines.append("")
+        lines.append("| Task ID | Status | Rounds Used |")
+        lines.append("|---|---|---|")
+        for result in self._task_results:
+            status = "PASSED" if result.ci_passed else "FAILED"
+            lines.append(f"| {result.task_id} | {status} | {result.ci_rounds_used} |")
+        lines.append("")
+
+        if fatal_errors:
+            lines.append("## Escalations")
+            lines.append("")
+            lines.append("| Error Type | Task ID | Reason |")
+            lines.append("|---|---|---|")
+            for err in fatal_errors:
+                error_type = err.fatal_error_type or "unknown"
+                reason = err.fatal_error_reason or "No reason provided"
+                lines.append(f"| {error_type} | {err.task_id} | {reason} |")
+            lines.append("")
+
+        lines.append("## Performance Metrics")
+        lines.append("")
+        lines.append(f"- **Total Runtime**: {runtime_str}")
+        lines.append(f"- **Iterations Consumed**: {self._iterations_consumed}")
+        lines.append(f"- **Tasks Completed**: {tasks_completed_count}/{total_tasks}")
+        lines.append(f"- **Readiness Score**: {readiness_score}%")
+        lines.append("")
+
+        return "\n".join(lines)
 
 
 @click.group()
