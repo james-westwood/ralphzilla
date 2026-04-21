@@ -893,7 +893,7 @@
         "Test runs and passes with uv run pytest tests/integration/test_dry_run_smoke.py -v"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [
         "M1-18c"
       ],
