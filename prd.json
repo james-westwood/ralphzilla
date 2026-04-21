@@ -949,7 +949,7 @@
         "tests/test_loop_supervisor.py: test_detects_missing_sprint_complete_marker, test_detects_traceback_in_final_lines, test_records_run_history_correctly, test_clean_exit_all_markers_present"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [
         "M1-02",
         "M1-18c"
