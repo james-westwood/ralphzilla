@@ -2808,12 +2808,18 @@ def run(
             prd = json.load(f)
 
         tasks = prd.get("tasks", [])
+        completed_ids = {t["id"] for t in tasks if t.get("completed")}
+
         for task in tasks:
             if task.get("completed"):
                 continue
             if task.get("owner") == "human":
                 continue
             if task.get("decomposed"):
+                continue
+
+            depends_on = task.get("depends_on", [])
+            if not all(dep_id in completed_ids for dep_id in depends_on):
                 continue
 
             acs = task.get("acceptance_criteria", [])
