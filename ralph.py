@@ -1801,10 +1801,249 @@ class PRDGuard:
 
 
 @dataclass
+class UnblockResult:
+    success: bool
+    actions_log: list[str]
+    escalated: bool = False
+    replacement_task_id: str | None = None
+    skip_to_next: bool = False
+    alternative_model: str | None = None
+
+
+@dataclass
 class BlockerResult:
     kind: BlockerKind
     task_id: str | None
     context: str
+
+
+class UnblockStrategy:
+    """
+    Provides specific recovery tactics for each BlockerKind variant.
+
+    For MERGE_CONFLICT: abort merge, reset branch, and re-apply changes.
+    For CI_FATAL: create FIX ticket with failure context and skip to next task.
+    For PRD_GUARD_VIOLATION: rollback PR, mark task for human review, create replacement task.
+    For REVIEWER_UNAVAILABLE: switch to alternative reviewer model or enable skip-review mode.
+
+    Each strategy logs actions taken and returns success/failure status for escalation.
+    """
+
+    def __init__(
+        self,
+        branch_manager: BranchManager,
+        pr_manager: PRManager,
+        task_tracker: TaskTracker,
+        ai_runner: "AIRunner",
+        logger: RalphLogger,
+    ):
+        self.branch_manager = branch_manager
+        self.pr_manager = pr_manager
+        self.task_tracker = task_tracker
+        self.ai_runner = ai_runner
+        self.logger = logger
+
+    def execute(
+        self,
+        blocker: BlockerResult,
+        task: dict,
+        prd: dict,
+    ) -> UnblockResult:
+        """Execute the appropriate unblocking strategy based on blocker kind."""
+        if blocker.kind == BlockerKind.MERGE_CONFLICT:
+            return self._handle_merge_conflict(blocker, task)
+        elif blocker.kind == BlockerKind.CI_FATAL:
+            return self._handle_ci_fatal(blocker, task)
+        elif blocker.kind == BlockerKind.PRD_GUARD_VIOLATION:
+            return self._handle_prd_guard_violation(blocker, task, prd)
+        elif blocker.kind == BlockerKind.REVIEWER_UNAVAILABLE:
+            return self._handle_reviewer_unavailable(blocker, task)
+        else:
+            return UnblockResult(
+                success=False,
+                actions_log=[f"Unknown blocker kind: {blocker.kind}"],
+                escalated=True,
+            )
+
+    def _handle_merge_conflict(
+        self,
+        blocker: BlockerResult,
+        task: dict,
+    ) -> UnblockResult:
+        """Abort merge, reset branch, and re-apply changes."""
+        actions: list[str] = []
+        task_id = task.get("id", "unknown")
+
+        actions.append(f"Detected merge conflict for task {task_id}")
+        actions.append(f"Context: {blocker.context[:100]}")
+
+        branch = f"ralph/{task_id}-{self.branch_manager.sanitise_branch_name(task['title'])}"
+
+        try:
+            actions.append(f"Resetting branch {branch} to main")
+            self.branch_manager.runner.run(
+                ["git", "checkout", branch],
+                cwd=self.branch_manager.repo_dir,
+                check=True,
+            )
+            self.branch_manager.runner.run(
+                ["git", "reset", "--hard", f"origin/{MAIN_BRANCH}"],
+                cwd=self.branch_manager.repo_dir,
+                check=True,
+            )
+            actions.append("Branch reset to origin/main")
+
+            actions.append("Re-applying changes via AI coder...")
+            self._reapply_changes(task)
+
+            actions.append("Merge conflict recovery completed successfully")
+            return UnblockResult(
+                success=True,
+                actions_log=actions,
+            )
+        except Exception as e:
+            actions.append(f"Merge conflict recovery failed: {e}")
+            return UnblockResult(
+                success=False,
+                actions_log=actions,
+                escalated=True,
+            )
+
+    def _reapply_changes(self, task: dict) -> None:
+        """Re-invoke the coder to re-apply changes."""
+        prompt = PromptBuilder.coder_prompt(task, "opencode", {}, resume=True)
+        self.ai_runner.run_coder("opencode", prompt, self.branch_manager.repo_dir)
+
+    def _handle_ci_fatal(
+        self,
+        blocker: BlockerResult,
+        task: dict,
+    ) -> UnblockResult:
+        """Create FIX ticket with failure context and skip to next task."""
+        actions: list[str] = []
+        task_id = task.get("id", "unknown")
+
+        actions.append(f"Detected CI fatal for task {task_id}")
+        actions.append(f"Failure context: {blocker.context[:100]}")
+
+        try:
+            ticket_title = f"FIX: {task.get('title', 'Untitled')} - CI failure"
+            ticket_body = (
+                f"CI failure in task {task_id}\n\n"
+                f"Failure context:\n{blocker.context}\n\n"
+                f"Task description: {task.get('description', '')}\n\n"
+                f"Acceptance criteria:\n"
+                + "\n".join(f"- {ac}" for ac in task.get("acceptance_criteria", []))
+            )
+            result = self.branch_manager.runner.run(
+                [
+                    "gh",
+                    "issue",
+                    "create",
+                    "--title",
+                    ticket_title,
+                    "--body",
+                    ticket_body,
+                ],
+                check=True,
+            )
+            actions.append(f"Created FIX ticket: {result.stdout.strip()[:100]}")
+            actions.append("Skipping to next task")
+            return UnblockResult(
+                success=True,
+                actions_log=actions,
+                skip_to_next=True,
+            )
+        except Exception as e:
+            actions.append(f"Failed to create FIX ticket: {e}")
+            return UnblockResult(
+                success=False,
+                actions_log=actions,
+                skip_to_next=True,
+                escalated=True,
+            )
+
+    def _handle_prd_guard_violation(
+        self,
+        blocker: BlockerResult,
+        task: dict,
+        prd: dict,
+    ) -> UnblockResult:
+        """Rollback PR, mark task for human review, create replacement task."""
+        actions: list[str] = []
+        task_id = task.get("id", "unknown")
+
+        actions.append(f"Detected PRD guard violation for task {task_id}")
+        actions.append(f"Violation: {blocker.context[:100]}")
+
+        pr_number = task.get("pr_number")
+        if pr_number:
+            try:
+                actions.append(f"Closing PR #{pr_number}")
+                self.pr_manager.close(
+                    pr_number,
+                    "PRD violation: prd.json was modified. Closing for human review.",
+                )
+                actions.append("PR closed and rolled back")
+            except Exception as e:
+                actions.append(f"Failed to close PR: {e}")
+
+        tasks = prd.get("tasks", [])
+        max_epic = 0
+        for t in tasks:
+            tid = t.get("id", "")
+            match = re.match(r"^M(\d+)", tid)
+            if match:
+                max_epic = max(max_epic, int(match.group(1)))
+
+        replacement_task = {
+            "id": f"M{max_epic + 1}-FIX",
+            "title": f"REVIEW: {task.get('title', 'Untitled')}",
+            "description": (
+                f"Human review required for task {task_id}. "
+                f"Original task violated PRD guard (coder modified prd.json). "
+                f"Original description: {task.get('description', '')}"
+            ),
+            "acceptance_criteria": task.get("acceptance_criteria", []),
+            "owner": "human",
+            "completed": False,
+            "depends_on": task.get("depends_on", []),
+            "epic": task.get("epic", f"M{max_epic}"),
+        }
+
+        self.task_tracker.add_task(replacement_task)
+        actions.append(f"Created replacement task: {replacement_task['id']}")
+        actions.append("Marked original task for human review")
+
+        return UnblockResult(
+            success=True,
+            actions_log=actions,
+            replacement_task_id=replacement_task["id"],
+            escalated=True,
+        )
+
+    def _handle_reviewer_unavailable(
+        self,
+        blocker: BlockerResult,
+        task: dict,
+    ) -> UnblockResult:
+        """Switch to alternative reviewer model or enable skip-review mode."""
+        actions: list[str] = []
+        task_id = task.get("id", "unknown")
+
+        actions.append(f"Detected reviewer unavailable for task {task_id}")
+        actions.append(f"Context: {blocker.context[:100]}")
+
+        alternative = "gemini"
+
+        actions.append(f"Switching to alternative reviewer: {alternative}")
+        actions.append("Reviewer unavailable recovery completed successfully")
+
+        return UnblockResult(
+            success=True,
+            actions_log=actions,
+            alternative_model=alternative,
+        )
 
 
 class BlockerAnalyser:
