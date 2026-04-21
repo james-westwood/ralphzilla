@@ -1,7 +1,123 @@
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
 from ralph import PRDGuardViolation, TaskTracker
+
+
+class TestTaskTrackerFreshLoad:
+    def test_fresh_load_reads_disk_each_call(self, tmp_path):
+        prd_file = tmp_path / "prd.json"
+        prd_data = {"tasks": [{"id": "T1", "completed": False}]}
+        prd_file.write_text(json.dumps(prd_data))
+
+        tracker = TaskTracker(prd_file, tmp_path / "progress.txt", MagicMock(), MagicMock())
+
+        result1 = tracker.load()
+        result1["tasks"][0]["completed"] = True
+
+        result2 = tracker.load()
+        assert result2["tasks"][0]["completed"] is False
+
+
+class TestTaskTrackerGetNextTask:
+    def test_get_next_task_returns_incomplete_ralph_owned_task(self, tmp_path):
+        prd_file = tmp_path / "prd.json"
+        prd_data = {
+            "tasks": [
+                {"id": "T1", "owner": "ralph", "completed": False},
+                {"id": "T2", "owner": "ralph", "completed": False},
+            ]
+        }
+        prd_file.write_text(json.dumps(prd_data))
+        tracker = TaskTracker(prd_file, tmp_path / "progress.txt", MagicMock(), MagicMock())
+
+        task = tracker.get_next_task()
+        assert task is not None
+        assert task["owner"] == "ralph"
+        assert task["completed"] is False
+        assert task["id"] == "T1"
+
+    def test_get_next_task_skips_human_owned_tasks(self, tmp_path):
+        prd_file = tmp_path / "prd.json"
+        prd_data = {
+            "tasks": [
+                {"id": "T1", "owner": "human", "completed": False},
+                {"id": "T2", "owner": "ralph", "completed": False},
+            ]
+        }
+        prd_file.write_text(json.dumps(prd_data))
+        tracker = TaskTracker(prd_file, tmp_path / "progress.txt", MagicMock(), MagicMock())
+
+        task = tracker.get_next_task()
+        assert task is not None
+        assert task["id"] == "T2"
+        assert task["owner"] == "ralph"
+
+    def test_get_next_task_respects_depends_on_completion(self, tmp_path):
+        prd_file = tmp_path / "prd.json"
+        prd_data = {
+            "tasks": [
+                {"id": "T1", "owner": "ralph", "completed": False},
+                {"id": "T2", "owner": "ralph", "completed": False, "depends_on": ["T1"]},
+                {"id": "T3", "owner": "ralph", "completed": False, "depends_on": ["T1", "T2"]},
+            ]
+        }
+        prd_file.write_text(json.dumps(prd_data))
+        tracker = TaskTracker(prd_file, tmp_path / "progress.txt", MagicMock(), MagicMock())
+
+        task1 = tracker.get_next_task()
+        assert task1["id"] == "T1"
+
+        tracker.mark_complete("T1")
+
+        task2 = tracker.get_next_task()
+        assert task2["id"] == "T2"
+
+        tracker.mark_complete("T2")
+
+        task3 = tracker.get_next_task()
+        assert task3["id"] == "T3"
+
+
+class TestTaskTrackerMarkComplete:
+    def test_mark_complete_writes_back_to_disk(self, tmp_path):
+        prd_file = tmp_path / "prd.json"
+        prd_data = {"tasks": [{"id": "T1", "completed": False, "owner": "ralph"}]}
+        prd_file.write_text(json.dumps(prd_data))
+        tracker = TaskTracker(prd_file, tmp_path / "progress.txt", MagicMock(), MagicMock())
+
+        tracker.mark_complete("T1")
+
+        loaded = tracker.load()
+        assert loaded["tasks"][0]["completed"] is True
+
+
+class TestTaskTrackerCommitTracking:
+    def test_commit_tracking_issues_correct_git_commands(self, tmp_path):
+        runner = MagicMock()
+        prd_file = tmp_path / "prd.json"
+        progress_file = tmp_path / "progress.txt"
+        prd_file.write_text("{}")
+        progress_file.write_text("")
+
+        tracker = TaskTracker(prd_file, progress_file, runner, MagicMock())
+
+        tracker.commit_tracking("T1", "Test Task")
+
+        assert runner.run.call_count == 3
+
+        calls = runner.run.call_args_list
+
+        assert calls[0][0][0] == ["git", "add", str(prd_file), str(progress_file)]
+        assert calls[0][1]["check"] is True
+
+        assert calls[1][0][0] == ["git", "commit", "-m", "[T1] Test Task: mark complete"]
+        assert calls[1][1]["check"] is True
+
+        assert calls[2][0][0] == ["git", "push", "origin", "main"]
+        assert calls[2][1]["check"] is True
 
 
 def test_task_tracker_load(tmp_path):
@@ -27,12 +143,6 @@ def test_get_next_task(tmp_path):
     prd_file.write_text(json.dumps(prd_data))
     tracker = TaskTracker(prd_file, tmp_path / "progress.txt", MagicMock(), MagicMock())
 
-    # T1 is completed.
-    # T2 is human.
-    # T3 depends on T4 (incomplete).
-    # T4 is next available ralph task.
-    # T5 depends on T1 (completed), so it would be next after T4.
-
     task = tracker.get_next_task()
     assert task["id"] == "T4"
 
@@ -53,8 +163,6 @@ def test_mark_complete_already_done(tmp_path):
     prd_file.write_text(json.dumps(prd_data))
     tracker = TaskTracker(prd_file, tmp_path / "progress.txt", MagicMock(), MagicMock())
 
-    import pytest
-
     with pytest.raises(PRDGuardViolation):
         tracker.mark_complete("T1")
 
@@ -65,19 +173,6 @@ def test_append_progress(tmp_path):
 
     tracker.append_progress("T1", "Title", 123, "2026-04-20")
     assert progress_file.read_text() == "2026-04-20 | T1 | Title | PR #123\n"
-
-
-def test_commit_tracking(tmp_path):
-    runner = MagicMock()
-    prd_file = tmp_path / "prd.json"
-    progress_file = tmp_path / "progress.txt"
-    tracker = TaskTracker(prd_file, progress_file, runner, MagicMock())
-
-    tracker.commit_tracking("T1", "Title")
-
-    assert runner.run.call_count == 3
-    # Check git add
-    runner.run.assert_any_call(["git", "add", str(prd_file), str(progress_file)], check=True)
 
 
 def test_add_task(tmp_path):
