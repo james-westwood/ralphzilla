@@ -1888,60 +1888,142 @@ class Orchestrator:
         reviewer: str,
         pr_info: PRInfo,
     ) -> TaskResult:
-        """Standard mode state machine."""
+        """Standard mode state machine.
+
+        Per DESIGN.md Per-Task State Machine (standard mode):
+        1. ensure_main_up_to_date() → BranchSyncError → STOP
+        2. checkout_or_create(branch) → BranchExistsError → STOP
+        3. run_coder() → CoderFailedError → STOP
+        4. PreCommitGate.run() → failure after max rounds → WARN, continue
+        5. TestRunner.run() → failure after max rounds → WARN, continue
+        6. push_branch() → CalledProcessError → STOP
+        7. PRManager.create() or get_existing() (already done in _run_task)
+        8. ReviewLoop.run() → max rounds exceeded → WARN, continue
+        9. CIPoller.wait_and_fix() → CIFailedFatal / CITimeoutError → STOP
+        10. PRDGuard.check() → PRDGuardViolation → close PR → STOP
+        11. PRManager.merge()
+        12. BranchManager.merge_and_cleanup()
+        13. TaskTracker.mark_complete() → append_progress() → commit_tracking()
+        """
+        self.logger.info(f"[_run_task_standard] START: {task['id']}")
+
+        # Step 1: ensure_main_up_to_date
+        self.logger.info("[_run_task_standard] Step 1: ensure_main_up_to_date")
         try:
             self.branch_manager.ensure_main_up_to_date()
         except BranchSyncError as e:
+            self.logger.error(f"[_run_task_standard] Step 1 failed: {e}")
             return TaskResult(fatal=True, message=str(e))
+        self.logger.info("[_run_task_standard] Step 1 complete")
 
+        # Step 2: checkout_or_create
+        self.logger.info("[_run_task_standard] Step 2: checkout_or_create")
         try:
-            self.branch_manager.checkout_or_create(branch, self.config.resume)
+            branch_status = self.branch_manager.checkout_or_create(branch, self.config.resume)
         except BranchExistsError as e:
+            self.logger.error(f"[_run_task_standard] Step 2 failed: {e}")
             return TaskResult(fatal=True, message=str(e))
+        self.logger.info("[_run_task_standard] Step 2 complete")
 
-        branch_status = self.branch_manager.checkout_or_create(branch, self.config.resume)
-
+        # Step 3: run_coder
+        self.logger.info("[_run_task_standard] Step 3: run_coder")
         try:
             prompt = PromptBuilder.coder_prompt(task, coder, prd, resume=branch_status.had_commits)
             success = self.ai_runner.run_coder(coder, prompt, self.config.repo_dir)
         except Exception as e:
-            self.logger.error(f"Coder failed: {e}")
+            self.logger.error(f"[_run_task_standard] Step 3 failed: {e}")
             return TaskResult(fatal=True, message=str(e))
-
         if not success:
+            self.logger.error("[_run_task_standard] Step 3: CoderFailedError")
             return TaskResult(fatal=True, message="Coder execution failed")
+        self.logger.info("[_run_task_standard] Step 3 complete")
 
-        self.precommit_gate.run(task, prd, self.config.repo_dir)
+        # Step 4: PreCommitGate.run()
+        self.logger.info("[_run_task_standard] Step 4: PreCommitGate.run")
+        precommit_result = self.precommit_gate.run(task, prd, self.config.repo_dir)
+        if not precommit_result.passed:
+            self.logger.warn(
+                f"[_run_task_standard] Step 4: pre-commit failed after "
+                f"{precommit_result.rounds_used} rounds"
+            )
+        else:
+            self.logger.info("[_run_task_standard] Step 4 complete")
 
-        self.test_runner.run(task, prd)
+        # Step 5: TestRunner.run()
+        self.logger.info("[_run_task_standard] Step 5: TestRunner.run")
+        test_result = self.test_runner.run(task, prd)
+        if not test_result.passed:
+            self.logger.warn(
+                f"[_run_task_standard] Step 5: tests failed after {test_result.rounds_used} rounds"
+            )
+        else:
+            self.logger.info("[_run_task_standard] Step 5 complete")
 
+        # Step 6: push_branch
+        self.logger.info("[_run_task_standard] Step 6: push_branch")
         try:
             self.branch_manager.push_branch(branch)
         except subprocess.CalledProcessError as e:
+            self.logger.error(f"[_run_task_standard] Step 6 failed: {e}")
             return TaskResult(fatal=True, message=f"Push failed: {e}")
+        self.logger.info("[_run_task_standard] Step 6 complete")
 
-        self.logger.info("Waiting for CI...")
+        # Step 7: ReviewLoop.run() (only if not skip_review)
+        if self.config.skip_review:
+            self.logger.info("[_run_task_standard] Step 7: skip_review=true, skipping")
+        else:
+            self.logger.info("[_run_task_standard] Step 7: ReviewLoop.run")
+            review_result = self.review_loop.run(task, pr_info.number, prd, coder, reviewer)
+            if review_result.verdict == "CHANGES_REQUESTED_MAX_REACHED":
+                self.logger.warn(
+                    f"[_run_task_standard] Step 7: max review rounds "
+                    f"({review_result.rounds_used}) exceeded"
+                )
+            elif review_result.verdict == "APPROVED":
+                self.logger.info("[_run_task_standard] Step 7 complete")
+
+        # Step 8: CI wait and fix
+        self.logger.info("[_run_task_standard] Step 8: CIPoller.wait_and_fix")
         try:
             self.ci_poller.wait_and_fix(task, pr_info.number, branch, prd)
-        except (CITimeoutError, CIFailedFatal) as e:
-            self.logger.error(f"CI failed: {e}")
+        except CIFailedFatal as e:
+            self.logger.error("[_run_task_standard] Step 8 failed: CIFailedFatal")
             self.pr_manager.close(pr_info.number, f"CI failed: {e}")
             return TaskResult(fatal=True, message=str(e))
+        except CITimeoutError as e:
+            self.logger.error("[_run_task_standard] Step 8 failed: CITimeoutError")
+            self.pr_manager.close(pr_info.number, f"CI timeout: {e}")
+            return TaskResult(fatal=True, message=str(e))
+        self.logger.info("[_run_task_standard] Step 8 complete")
 
+        # Step 9: PRDGuard.check()
+        self.logger.info("[_run_task_standard] Step 9: PRDGuard.check")
         try:
             self.prd_guard.check(pr_info.number)
         except PRDGuardViolation as e:
-            self.logger.error(f"PRDGuard violation: {e}")
+            self.logger.error("[_run_task_standard] Step 9: PRDGuardViolation")
             self.pr_manager.close(pr_info.number, str(e))
-            raise
+            return TaskResult(fatal=True, message=str(e))
+        self.logger.info("[_run_task_standard] Step 9 complete")
 
+        # Step 10: PRManager.merge
+        self.logger.info("[_run_task_standard] Step 10: PRManager.merge")
         try:
             self.pr_manager.merge(pr_info.number)
         except subprocess.CalledProcessError as e:
+            self.logger.error(f"[_run_task_standard] Step 10 failed: {e}")
             return TaskResult(fatal=True, message=f"Merge failed: {e}")
+        self.logger.info("[_run_task_standard] Step 10 complete")
 
+        # Step 11: BranchManager.merge_and_cleanup
+        self.logger.info("[_run_task_standard] Step 11: BranchManager.merge_and_cleanup")
         self.branch_manager.merge_and_cleanup(branch)
+        self.logger.info("[_run_task_standard] Step 11 complete")
 
+        # Step 12: TaskTracker.mark_complete() → append_progress() → commit_tracking()
+        self.logger.info(
+            "[_run_task_standard] Step 12: mark_complete → append_progress → commit_tracking"
+        )
         now = datetime.now().strftime("%Y-%m-%d")
         self.task_tracker.append_progress(task["id"], task["title"], pr_info.number, now)
         self.task_tracker.mark_complete(task["id"])
@@ -1950,7 +2032,9 @@ class Orchestrator:
             self.task_tracker.commit_tracking(task["id"], task["title"])
         except subprocess.CalledProcessError as e:
             self.logger.warn(f"Tracking commit failed: {e}")
+        self.logger.info("[_run_task_standard] Step 12 complete")
 
+        self.logger.info(f"[_run_task_standard] COMPLETE: {task['id']}")
         return TaskResult(fatal=False)
 
     def _run_task_tdd(
