@@ -11,6 +11,7 @@ license = { text = "MIT" }
 requires-python = ">=3.13"
 dependencies = [
     "click>=8.0",
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]
