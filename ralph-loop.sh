@@ -504,6 +504,80 @@ PYEOF
   fi
   log "  Branch confirmed: $CURRENT_BRANCH"
 
+  # ── Complexity check: decompose complexity=3 tasks before coding ────────────
+
+  TASK_COMPLEXITY=$(python3 -c "
+import json, sys
+with open('prd.json') as f:
+    prd = json.load(f)
+task = next((t for t in prd['tasks'] if t['id'] == sys.argv[1]), None)
+print(task.get('complexity', 2) if task else 2)
+" "$TASK_ID" 2>/dev/null || echo 2)
+
+  if [[ "$TASK_COMPLEXITY" -ge 3 ]]; then
+    log "  Task complexity=$TASK_COMPLEXITY — decomposing into subtasks before coding..."
+    DECOMPOSE_PROMPT="You are a task decomposer for the ralphzilla sprint runner.
+
+The following task has been flagged as too complex for a single coding session (complexity=3).
+Split it into 2-4 smaller subtasks, each implementable in under 20-45 minutes by an AI coder.
+
+Task ID: $TASK_ID
+Task title: $TASK_TITLE
+Description: $TASK_AC
+
+Rules:
+- Each subtask must have: id (format ${TASK_ID}a, ${TASK_ID}b, ...), title (slug_style, max 40 chars),
+  description (>=100 chars), acceptance_criteria (list of file:test_name strings),
+  owner (ralph), completed (false), epic ($TASK_EPIC), complexity (1 or 2),
+  depends_on (list — later subtasks should depend on earlier ones)
+- The first subtask gets depends_on from the parent's depends_on
+- Output ONLY valid JSON array — no explanation. Start with [ end with ]."
+
+    DECOMPOSE_OUTPUT=$(timeout 3m opencode run -m "$OPENCODE_CODER_MODEL" "$DECOMPOSE_PROMPT" 2>/dev/null | python3 -c "
+import sys, re, json
+text = sys.stdin.read()
+text = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', text)
+# Extract JSON array
+m = re.search(r'\[.*\]', text, re.DOTALL)
+if m:
+    print(m.group(0))
+" 2>/dev/null) || true
+
+    if [[ -n "$DECOMPOSE_OUTPUT" ]]; then
+      python3 - <<PYEOF
+import json, sys
+try:
+    subtasks = json.loads("""$DECOMPOSE_OUTPUT""")
+    with open("prd.json") as f:
+        prd = json.load(f)
+    # Mark parent decomposed
+    for t in prd["tasks"]:
+        if t["id"] == "$TASK_ID":
+            t["decomposed"] = True
+            break
+    # Insert subtasks after parent
+    parent_idx = next(i for i, t in enumerate(prd["tasks"]) if t["id"] == "$TASK_ID")
+    for i, st in enumerate(subtasks):
+        prd["tasks"].insert(parent_idx + 1 + i, st)
+    with open("prd.json", "w") as f:
+        json.dump(prd, f, indent=2)
+        f.write("\n")
+    print(f"Decomposed $TASK_ID into {len(subtasks)} subtasks")
+except Exception as e:
+    print(f"Decomposition parse failed: {e}", file=sys.stderr)
+PYEOF
+      git add prd.json
+      git commit -m "[$TASK_ID] decompose into subtasks (complexity=3)"
+      git push origin "$MAIN_BRANCH"
+      git checkout "$MAIN_BRANCH"
+      git branch -D "$BRANCH" 2>/dev/null || true
+      log "  Decomposed $TASK_ID — restarting loop to pick up subtasks."
+      continue
+    else
+      log "  WARNING: decomposition produced no output — proceeding with original task."
+    fi
+  fi
+
   # ── Coding step ────────────────────────────────────────────────────────────
 
   log "  Running coder ($CODER)..."

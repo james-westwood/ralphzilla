@@ -2711,13 +2711,24 @@ Next epic prefix should be M{max_epic + 1} for new tasks.
 
 Output a JSON list of task objects with these exact fields:
 - id: string (format: M{{next_num}}-01, M{{next_num}}-02, etc.)
-- title: string (brief, descriptive)
+- title: string (slug_style_lowercase, max 40 chars, no spaces)
 - description: string (detailed, >= 100 chars, explains what and why)
-- acceptance_criteria: list of strings (each references a file path like tests/ or .py)
+- acceptance_criteria: list of strings (each references a file path like tests/ or ralph.py)
 - owner: string ("ralph" - never "human")
 - completed: false
-- depends_on: list of strings (IDs from existing tasks that must complete first, can be empty)
-- epic: string (like "M3" for the next epic)
+- depends_on: list of strings (IDs of OTHER TASKS IN THIS LIST that must complete first, \
+plus any existing task IDs that are prerequisites — empty list if none)
+- epic: string (M{max_epic + 1})
+- complexity: integer (1=simple: single function or constant, implementable in <20min; \
+2=medium: one class + tests, implementable in 20-45min; \
+3=complex: multiple classes or significant architectural work, >45min)
+
+Task sizing rules — IMPORTANT:
+- Prefer complexity 1 or 2. A single roadmap bullet may need to become 2-3 tasks if it is large.
+- Each task must be implementable by a single AI coding session without hitting a 15-minute timeout.
+- If a deliverable involves multiple distinct classes or subsystems, split it into separate tasks \
+  and wire them together with depends_on.
+- Set depends_on to include IDs of tasks generated in THIS list when one task builds on another.
 
 Output ONLY valid JSON — no explanation, no markdown formatting. Start with [ and end with ].
 """

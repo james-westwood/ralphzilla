@@ -1109,6 +1109,122 @@
       "completed": true,
       "depends_on": [],
       "epic": "M4"
+    },
+    {
+      "id": "M5-01",
+      "title": "dependency_graph_dag_builder",
+      "description": "Implement a dependency graph system in ralph.py that builds a DAG from task `depends_on` fields. Create a `DependencyGraph` class in `ralph.py` that parses all tasks from `prd.json`, validates that dependencies exist (no dangling references), detects cycles using DFS, and provides topological sorting. The class should expose methods: `build_graph(tasks: list[dict]) -> None`, `validate_dependencies() -> list[str]` (returns missing task IDs), `detect_cycles() -> bool`, and `topological_sort() -> list[str]` (returns ordered task IDs). Use a standard adjacency list representation internally. Raise `DependencyCycleError` if a cycle is detected. This is foundational infrastructure for parallel task execution \u2014 it determines which tasks can run concurrently and which must wait.",
+      "acceptance_criteria": [
+        "tests/test_dependency_graph.py: DAG correctly built from tasks with depends_on",
+        "tests/test_dependency_graph.py: validate_dependencies() detects missing task references",
+        "tests/test_dependency_graph.py: detect_cycles() returns True for circular dependencies",
+        "tests/test_dependency_graph.py: topological_sort() returns valid execution order for acyclic graphs",
+        "tests/test_dependency_graph.py: DependencyCycleError raised on cycle with helpful message"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [],
+      "epic": "M5",
+      "complexity": 2
+    },
+    {
+      "id": "M5-02",
+      "title": "wave_executor_parallel_runner",
+      "description": "Implement a wave-based parallel executor in `ralph.py` that groups tasks into waves based on dependency readiness and executes them concurrently. Create a `WaveExecutor` class that uses the DependencyGraph from M5-01 to: (1) group tasks with satisfied dependencies into waves where no task depends on another in the same wave, (2) run each wave using `asyncio.gather()` or `multiprocessing.Pool` (default to asyncio for lower overhead), (3) track task results and propagate failures. Methods: `build_waves(task_ids: list[str]) -> list[list[str]]` (returns waves of task IDs), `execute_wave(wave: list[str]) -> dict[str, TaskResult]`, and `run_parallel(tasks: list[dict]) -> ExecutionReport`. Each task execution should be isolated \u2014 it spawns a subprocess or async task that runs the existing task execution logic. Limit parallelism with `--max-workers` flag (default: CPU count). Task failures in a wave should not prevent other wave tasks from completing, but failed tasks block dependent tasks in future waves.",
+      "acceptance_criteria": [
+        "tests/test_wave_executor.py: build_waves() groups independent tasks into same wave",
+        "tests/test_wave_executor.py: build_waves() places dependent tasks in sequential waves",
+        "tests/test_wave_executor.py: execute_wave() runs tasks concurrently using asyncio",
+        "tests/test_wave_executor.py: --max-workers flag limits concurrent execution",
+        "tests/test_wave_executor.py: ExecutionReport contains per-task success/failure status",
+        "tests/test_wave_executor.py: failed tasks block dependents in subsequent waves"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M5-01"
+      ],
+      "epic": "M5",
+      "complexity": 3
+    },
+    {
+      "id": "M5-03",
+      "title": "branch_isolation_worktrees",
+      "description": "Implement git worktree-based branch isolation for parallel task execution in `ralph.py`. When running tasks in parallel via WaveExecutor (M5-02), each task must execute in its own isolated git worktree to prevent file system conflicts. Create a `WorktreeManager` class with methods: `create_worktree(task_id: str, base_branch: str) -> Path` (creates worktree at `.ralph/worktrees/{task_id}/`), `cleanup_worktree(task_id: str) -> None` (removes worktree and deletes directory), and `list_active_worktrees() -> list[str]`. The worktree name should include the workstream prefix if `--workstream` is set (e.g., `feature-{workstream}-{task_id}`). Use `git worktree add` with `-b` to create new branches per task. Before task execution, checkout the worktree; after task completion (success or failure), clean up the worktree. Ensure the worktree inherits the correct base branch state so tasks start from a clean, consistent point. This prevents parallel tasks from interfering with each other's file operations.",
+      "acceptance_criteria": [
+        "tests/test_worktree_manager.py: create_worktree() creates isolated git worktree directory",
+        "tests/test_worktree_manager.py: worktree branch naming includes workstream prefix when --workstream set",
+        "tests/test_worktree_manager.py: task execution uses worktree directory as working directory",
+        "tests/test_worktree_manager.py: cleanup_worktree() removes worktree and prunes git references",
+        "tests/test_worktree_manager.py: failed tasks still trigger worktree cleanup",
+        "tests/test_worktree_manager.py: parallel tasks use separate worktrees without conflicts"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M5-01"
+      ],
+      "epic": "M5",
+      "complexity": 2
+    },
+    {
+      "id": "M5-04",
+      "title": "conflict_detection_file_overlap",
+      "description": "Implement pre-wave conflict detection in `ralph.py` to ensure tasks in the same wave don't share files in their `files` field. Create a `ConflictDetector` class that analyzes a set of tasks before they're grouped into a wave. Methods: `check_wave_conflicts(tasks: list[dict]) -> ConflictReport` where ConflictReport contains `has_conflicts: bool`, `conflicting_tasks: list[tuple[str, str]]` (pairs of task IDs that share files), and `shared_files: dict[str, list[str]]` (maps file path to task IDs). Two tasks conflict if they both list the same file path in their `files` field. Before executing any wave, run this check. If conflicts exist, the conflicting tasks must be split into separate waves (or the wave builder must ensure they're never in the same wave). This prevents race conditions where parallel tasks modify the same files. Integration: WaveExecutor.build_waves() should use ConflictDetector to verify waves are safe before execution.",
+      "acceptance_criteria": [
+        "tests/test_conflict_detector.py: check_wave_conflicts() returns no conflicts for tasks with disjoint files",
+        "tests/test_conflict_detector.py: detects when two tasks share a file in files field",
+        "tests/test_conflict_detector.py: ConflictReport contains correct conflicting task pairs",
+        "tests/test_conflict_detector.py: build_waves() places conflicting tasks in separate waves",
+        "tests/test_conflict_detector.py: error raised if wave with conflicts attempted execution"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M5-01"
+      ],
+      "epic": "M5",
+      "complexity": 2
+    },
+    {
+      "id": "M5-05",
+      "title": "workstream_namespacing",
+      "description": "Implement the `--workstream NAME` CLI flag in `ralph.py` that scopes task selection and branch naming to a specific workstream. Add the flag to the main CLI entry point using Click. When `--workstream` is provided: (1) task selection from `prd.json` only considers tasks whose `id` starts with the workstream prefix (e.g., `--workstream M5` selects M5-01, M5-02, etc.), (2) branch names include the workstream prefix: `feature-{workstream}-{task_id}`, (3) worktree directories include the workstream: `.ralph/worktrees/{workstream}/{task_id}/`, (4) update `TaskTracker` to filter tasks by workstream when loading from `prd.json`. Methods to modify: `load_tasks()` accepts optional `workstream: str | None`, branch naming utilities, and worktree paths. This allows multiple parallel workstreams (e.g., different milestones or features) to run independently without interfering with each other's branches or task queues. If no workstream is specified, all tasks are eligible and no prefix is added to branches.",
+      "acceptance_criteria": [
+        "tests/test_workstream.py: --workstream flag filters tasks by prefix in prd.json",
+        "tests/test_workstream.py: branch names include workstream prefix when flag set",
+        "tests/test_workstream.py: worktree paths include workstream directory",
+        "tests/test_workstream.py: without --workstream, all tasks selected and no prefix added",
+        "tests/test_workstream.py: multiple workstreams can run concurrently with isolated branches",
+        "tests/test_workstream.py: TaskTracker.load_tasks() respects workstream filter"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [],
+      "epic": "M5",
+      "complexity": 2
+    },
+    {
+      "id": "M5-06",
+      "title": "wave_execution_summary",
+      "description": "Implement post-wave execution reporting in `ralph.py` that displays which tasks succeeded or failed after each wave completes, before starting the next wave. Extend the `WaveExecutor` class from M5-02 with a `print_wave_summary(wave_results: dict[str, TaskResult], wave_number: int) -> None` method. The summary should output: wave number, total tasks in wave, succeeded count (green), failed count (red), skipped count (blocked by previous failures), and a per-task breakdown showing task ID, status (\u2713/\u2717/\u2298), duration, and brief error message for failures. Use Click's `echo()` with colors via `click.style()` or `click.secho()`. The summary prints immediately after a wave finishes, before WaveExecutor proceeds to build and execute the next wave. This gives operators real-time visibility into batch task progress and helps identify which tasks need attention without waiting for the entire backlog to complete. Store wave results in `ExecutionReport.wave_histories: list[WaveSummary]` for potential post-run analysis.",
+      "acceptance_criteria": [
+        "tests/test_wave_summary.py: wave summary prints after each wave completes",
+        "tests/test_wave_summary.py: summary shows correct counts for succeeded/failed/skipped",
+        "tests/test_wave_summary.py: per-task breakdown includes task ID and status",
+        "tests/test_wave_summary.py: failed tasks show error message in summary",
+        "tests/test_wave_summary.py: summary uses color coding (green/red/yellow)",
+        "tests/test_wave_summary.py: ExecutionReport.wave_histories contains all wave summaries"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [
+        "M5-02",
+        "M5-03",
+        "M5-04"
+      ],
+      "epic": "M5",
+      "complexity": 1
     }
   ]
 }
