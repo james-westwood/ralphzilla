@@ -1140,7 +1140,7 @@
         "tests/test_wave_executor.py: failed tasks block dependents in subsequent waves"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [
         "M5-01"
       ],
