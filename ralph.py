@@ -4287,9 +4287,7 @@ class Orchestrator:
         if pr_info is None:
             self.logger.info("[_run_task_standard] Step 6.5: create PR")
             try:
-                pr_info = self.pr_manager.create(
-                    branch, task["title"], PromptBuilder.pr_body(task)
-                )
+                pr_info = self.pr_manager.create(branch, task["title"], PromptBuilder.pr_body(task))
             except subprocess.CalledProcessError as e:
                 self.logger.error(f"[_run_task_standard] Step 6.5 failed: {e}")
                 self._task_results.append(
