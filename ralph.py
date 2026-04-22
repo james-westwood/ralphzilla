@@ -1952,7 +1952,7 @@ class PlanChecker:
         self.validator = validator or PrdValidator()
 
     def check_structural(self, prd: dict) -> list[str]:
-        """Validates required fields, non-empty ACs, and resolved dependencies."""
+        """Validates required fields, non-empty ACs, and that depends_on IDs exist."""
         errors = []
         required_fields = {
             "id",
@@ -1964,7 +1964,6 @@ class PlanChecker:
         }  # noqa: E501
         tasks = prd.get("tasks", [])
         all_ids = {t["id"] for t in tasks}
-        completed_ids = {t["id"] for t in tasks if t.get("completed")}
 
         for task in tasks:
             if task.get("completed"):
@@ -1983,8 +1982,6 @@ class PlanChecker:
             for dep in task.get("depends_on", []):
                 if dep not in all_ids:
                     errors.append(f"{task_id}: depends_on unknown task '{dep}'")
-                elif dep not in completed_ids:
-                    errors.append(f"{task_id}: depends_on incomplete task '{dep}'")
 
             try:
                 self.validator.validate(task, all_ids)
