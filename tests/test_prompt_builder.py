@@ -11,7 +11,7 @@ def test_coder_prompt():
     }
     prd = {"epic_addenda": {"E1": "Addendum 1"}}
 
-    prompt = PromptBuilder.coder_prompt(task, "Claude", prd)
+    prompt = PromptBuilder.coder_prompt(task, prd)
     assert "Task 1" in prompt
     assert "AC1" in prompt
     assert "1." in prompt
@@ -23,8 +23,8 @@ def test_coder_prompt():
 
 def test_coder_prompt_resume():
     task = {"title": "T1"}
-    prompt = PromptBuilder.coder_prompt(task, "C", {}, resume=True)
-    assert "already has commits" in prompt
+    prompt = PromptBuilder.coder_prompt(task, {}, resume=True)
+    assert "partial work" in prompt
 
 
 def test_reviewer_prompt_with_addenda():
@@ -144,7 +144,7 @@ def test_coder_prompt_includes_epic_addenda_when_matching():
         "epic": "M2",
     }
     prd = {"epic_addenda": {"M2": "Check for edge case X in module Y."}}
-    prompt = PromptBuilder.coder_prompt(task, "claude", prd)
+    prompt = PromptBuilder.coder_prompt(task, prd)
     assert "Check for edge case X in module Y." in prompt
     assert "Epic-specific checks (M2)" in prompt
 
@@ -159,7 +159,7 @@ def test_coder_prompt_no_addenda_when_no_match():
         "epic": "M2",
     }
     prd = {"epic_addenda": {"M1": "Wrong epic addendum."}}
-    prompt = PromptBuilder.coder_prompt(task, "claude", prd)
+    prompt = PromptBuilder.coder_prompt(task, prd)
     assert "Wrong epic addendum" not in prompt
 
 
