@@ -4141,7 +4141,7 @@ class Orchestrator:
         prd: dict,
         coder: str,
         reviewer: str,
-        pr_info: PRInfo,
+        pr_info: PRInfo | None,
     ) -> TaskResult:
         """Standard mode state machine.
 
@@ -4152,13 +4152,13 @@ class Orchestrator:
         4. PreCommitGate.run() → failure after max rounds → WARN, continue
         5. TestRunner.run() → failure after max rounds → WARN, continue
         6. push_branch() → CalledProcessError → STOP
-        7. PRManager.create() or get_existing() (already done in _run_task)
-        8. ReviewLoop.run() → max rounds exceeded → WARN, continue
-        9. CIPoller.wait_and_fix() → CIFailedFatal / CITimeoutError → STOP
-        10. PRDGuard.check() → PRDGuardViolation → close PR → STOP
-        11. PRManager.merge()
-        12. BranchManager.merge_and_cleanup()
-        13. TaskTracker.mark_complete() → append_progress() → commit_tracking()
+        6.5. PRManager.create() if no existing PR
+        7. ReviewLoop.run() → max rounds exceeded → WARN, continue
+        8. CIPoller.wait_and_fix() → CIFailedFatal / CITimeoutError → STOP
+        9. PRDGuard.check() → PRDGuardViolation → close PR → STOP
+        10. PRManager.merge()
+        11. BranchManager.merge_and_cleanup()
+        12. TaskTracker.mark_complete() → append_progress() → commit_tracking()
         """
         self.logger.info(f"[_run_task_standard] START: {task['id']}")
 
@@ -4282,6 +4282,30 @@ class Orchestrator:
             )
             return TaskResult(fatal=True, message=f"Push failed: {e}")
         self.logger.info("[_run_task_standard] Step 6 complete")
+
+        # Step 6.5: Create PR if no existing PR
+        if pr_info is None:
+            self.logger.info("[_run_task_standard] Step 6.5: create PR")
+            try:
+                pr_info = self.pr_manager.create(
+                    branch, task["title"], PromptBuilder.pr_body(task)
+                )
+            except subprocess.CalledProcessError as e:
+                self.logger.error(f"[_run_task_standard] Step 6.5 failed: {e}")
+                self._task_results.append(
+                    TaskExecutionResult(
+                        task_id=task["id"],
+                        title=task.get("title", "Untitled"),
+                        pr_number=None,
+                        ci_passed=False,
+                        ci_rounds_used=0,
+                        escalated=True,
+                        fatal_error_type="PRCreationFailed",
+                        fatal_error_reason=str(e),
+                    )
+                )
+                return TaskResult(fatal=True, message=f"PR creation failed: {e}")
+            self.logger.info("[_run_task_standard] Step 6.5 complete")
 
         # Step 7: ReviewLoop.run() (only if not skip_review)
         if self.config.skip_review:
@@ -4428,7 +4452,7 @@ class Orchestrator:
         prd: dict,
         coder: str,
         reviewer: str,
-        pr_info: PRInfo,
+        pr_info: PRInfo | None,
     ) -> TaskResult:
         """TDD mode: write tests -> quality check -> code -> rest of standard flow."""
         self.logger.info("TDD mode: writing tests...")
@@ -4456,17 +4480,12 @@ class Orchestrator:
         """Execute a single task."""
         coder, reviewer, _ = self.ai_runner.assign_agents(task)
 
-        pr_body = PromptBuilder.pr_body(task)
-
         try:
-            existing = self.pr_manager.get_existing(branch)
-            if existing:
-                self.logger.info(f"Resuming existing PR #{existing.number}")
-                pr_info = existing
-            else:
-                pr_info = self.pr_manager.create(branch, task["title"], pr_body)
+            pr_info = self.pr_manager.get_existing(branch)
+            if pr_info:
+                self.logger.info(f"Resuming existing PR #{pr_info.number}")
         except subprocess.CalledProcessError as e:
-            return TaskResult(fatal=True, message=f"PR creation failed: {e}")
+            return TaskResult(fatal=True, message=f"PR check failed: {e}")
 
         if self.config.tdd_mode:
             return self._run_task_tdd(task, branch, prd, coder, reviewer, pr_info)
