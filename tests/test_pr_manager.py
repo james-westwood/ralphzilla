@@ -36,6 +36,23 @@ class TestPRManagerCreate:
         assert result.number == 123
         assert result.url == "https://github.com/owner/repo/pull/123"
 
+    def test_create_uses_head_flag(self, mock_runner, mock_logger):
+        """Verify create uses --head flag (not invalid --branch flag)."""
+        mock_runner.run.return_value = MagicMock(
+            returncode=0,
+            stdout="https://github.com/owner/repo/pull/123",
+            stderr="",
+        )
+
+        pr_manager = PRManager(mock_runner, mock_logger)
+        pr_manager.create("feature-branch", "Test PR", "Test body")
+
+        call_args = mock_runner.run.call_args[0][0]
+        assert "--head" in call_args
+        assert "feature-branch" in call_args
+        # Ensure invalid --branch flag is not used
+        assert "--branch" not in call_args
+
     def test_create_parses_pr_number_with_higher_digits(self, mock_runner, mock_logger):
         mock_runner.run.return_value = MagicMock(
             returncode=0,

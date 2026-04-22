@@ -2311,7 +2311,7 @@ class PRManager:
     def create(self, branch: str, title: str, body: str) -> PRInfo:
         """Runs gh pr create, parses PR number, returns PRInfo."""
         result = self.runner.run(
-            ["gh", "pr", "create", "--branch", branch, "--title", title, "--body", body],
+            ["gh", "pr", "create", "--head", branch, "--title", title, "--body", body],
             check=True,
         )
         url = result.stdout.strip()
@@ -4478,12 +4478,14 @@ class Orchestrator:
         """Execute a single task."""
         coder, reviewer, _ = self.ai_runner.assign_agents(task)
 
-        try:
-            pr_info = self.pr_manager.get_existing(branch)
-            if pr_info:
-                self.logger.info(f"Resuming existing PR #{pr_info.number}")
-        except subprocess.CalledProcessError as e:
-            return TaskResult(fatal=True, message=f"PR check failed: {e}")
+        pr_info = None
+        if self.config.resume:
+            try:
+                pr_info = self.pr_manager.get_existing(branch)
+                if pr_info:
+                    self.logger.info(f"Resuming existing PR #{pr_info.number}")
+            except subprocess.CalledProcessError as e:
+                return TaskResult(fatal=True, message=f"PR check failed: {e}")
 
         if self.config.tdd_mode:
             return self._run_task_tdd(task, branch, prd, coder, reviewer, pr_info)
