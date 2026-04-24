@@ -960,7 +960,10 @@ class ReviewQualityChecker:
             return result, ""
 
         self.logger.warn(f"Review quality check failed: {result.reason}")
-        available_agents = ["gemini", "opencode", "claude"]
+        if self.config.opencode_only:
+            available_agents = ["opencode", "gemini", "claude"]
+        else:
+            available_agents = ["gemini", "opencode", "claude"]
         retry_agent = available_agents[(round_num + 1) % len(available_agents)]
         return result, retry_agent
 
@@ -1029,21 +1032,10 @@ class ReviewLoop:
                 self.logger.error(f"Reviewer {current_reviewer} returned no output")
                 previous_reviews.append("")
                 if self.config.opencode_only:
-                    current_reviewer = (
-                        "gemini"
-                        if current_reviewer == "opencode"
-                        else "claude"
-                        if current_reviewer == "gemini"
-                        else "opencode"
-                    )
+                    _fallback = {"opencode": "gemini", "gemini": "claude", "claude": "opencode"}
                 else:
-                    current_reviewer = (
-                        "gemini"
-                        if current_reviewer == "claude"
-                        else "opencode"
-                        if current_reviewer == "gemini"
-                        else "claude"
-                    )
+                    _fallback = {"claude": "gemini", "gemini": "opencode", "opencode": "claude"}
+                current_reviewer = _fallback.get(current_reviewer, current_reviewer)
                 continue
 
             previous_reviews.append(review_text)
@@ -4718,17 +4710,20 @@ def cli():
 @click.option(
     "--opencode-model",
     default=DEFAULT_OPENCODE_MODEL,
-    help="Override opencode coder model (default: opencode/big-pickle)",
+    show_default=True,
+    help="Override opencode coder model",
 )
 @click.option(
     "--opencode-reviewer-model",
     default=DEFAULT_OPENCODE_REVIEWER_MODEL,
-    help="Override opencode reviewer model (default: opencode/kimi-k2.5)",
+    show_default=True,
+    help="Override opencode reviewer model",
 )
 @click.option(
     "--opencode-test-writer-model",
     default=DEFAULT_OPENCODE_TEST_WRITER_MODEL,
-    help="Override opencode test-writer model (default: opencode/minimax-m2.7)",
+    show_default=True,
+    help="Override opencode test-writer model",
 )
 @click.option(
     "--resume",
