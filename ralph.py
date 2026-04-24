@@ -3432,7 +3432,14 @@ class AIRunner:
         result = re.sub(r"\n{3,}", "\n\n", result)
         return result.strip()
 
-    def run_coder(self, agent: str, prompt: str, cwd: Path, *, opencode_model_override: str | None = None) -> bool:
+    def run_coder(
+        self,
+        agent: str,
+        prompt: str,
+        cwd: Path,
+        *,
+        opencode_model_override: str | None = None,
+    ) -> bool:
         """Invokes the agent subprocess, returns True on success."""
         self.logger.info(f"Invoking coder: {agent}")
         try:
@@ -3506,7 +3513,12 @@ class AIRunner:
         if agent is None:
             agent = "gemini" if self._is_nested_claude_session() else "claude"
         if agent == "opencode":
-            return self.run_coder(agent, prompt, cwd, opencode_model_override=self.config.opencode_test_writer_model)
+            return self.run_coder(
+                agent,
+                prompt,
+                cwd,
+                opencode_model_override=self.config.opencode_test_writer_model,
+            )
         return self.run_coder(agent, prompt, cwd)
 
     def run_decompose(self, task: dict) -> list[dict]:
