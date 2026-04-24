@@ -4718,7 +4718,17 @@ def cli():
 @click.option(
     "--opencode-model",
     default=DEFAULT_OPENCODE_MODEL,
-    help="Override opencode model (default: opencode/kimi-k2.5)",
+    help="Override opencode coder model (default: opencode/big-pickle)",
+)
+@click.option(
+    "--opencode-reviewer-model",
+    default=DEFAULT_OPENCODE_REVIEWER_MODEL,
+    help="Override opencode reviewer model (default: opencode/kimi-k2.5)",
+)
+@click.option(
+    "--opencode-test-writer-model",
+    default=DEFAULT_OPENCODE_TEST_WRITER_MODEL,
+    help="Override opencode test-writer model (default: opencode/minimax-m2.7)",
 )
 @click.option(
     "--resume",
@@ -4798,6 +4808,8 @@ def run(
     gemini_only: bool,
     opencode_only: bool,
     opencode_model: str,
+    opencode_reviewer_model: str,
+    opencode_test_writer_model: str,
     resume: bool,
     max_test_fix_rounds: int,
     max_test_write_rounds: int,
@@ -4822,6 +4834,8 @@ def run(
         tdd_mode=tdd_mode,
         model_mode="random",
         opencode_model=opencode_model,
+        opencode_reviewer_model=opencode_reviewer_model,
+        opencode_test_writer_model=opencode_test_writer_model,
         resume=resume,
         repo_dir=repo_dir,
         log_file=log_file,
