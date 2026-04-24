@@ -182,7 +182,9 @@ def test_run_coder_opencode_model_override():
     ai = AIRunner(runner, MagicMock(), config)
 
     ai.run_coder(
-        "opencode", "test prompt", Path("."),
+        "opencode",
+        "test prompt",
+        Path("."),
         opencode_model_override="opencode/minimax-m2.7",
     )
 
