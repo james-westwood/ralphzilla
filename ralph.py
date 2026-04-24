@@ -1028,13 +1028,22 @@ class ReviewLoop:
             if not review_text:
                 self.logger.error(f"Reviewer {current_reviewer} returned no output")
                 previous_reviews.append("")
-                current_reviewer = (
-                    "gemini"
-                    if current_reviewer == "claude"
-                    else "opencode"
-                    if current_reviewer == "gemini"
-                    else "claude"
-                )
+                if self.config.opencode_only:
+                    current_reviewer = (
+                        "gemini"
+                        if current_reviewer == "opencode"
+                        else "claude"
+                        if current_reviewer == "gemini"
+                        else "opencode"
+                    )
+                else:
+                    current_reviewer = (
+                        "gemini"
+                        if current_reviewer == "claude"
+                        else "opencode"
+                        if current_reviewer == "gemini"
+                        else "claude"
+                    )
                 continue
 
             previous_reviews.append(review_text)
@@ -3377,7 +3386,7 @@ class AIRunner:
         if self.config.gemini_only:
             return "gemini", "claude", "opencode"
         if self.config.opencode_only:
-            return "opencode", "claude", "gemini"
+            return "opencode", "opencode", "opencode"
 
         complexity = task.get("complexity") or 1
         # Complexity mapping from DESIGN.md
@@ -3423,7 +3432,7 @@ class AIRunner:
         result = re.sub(r"\n{3,}", "\n\n", result)
         return result.strip()
 
-    def run_coder(self, agent: str, prompt: str, cwd: Path) -> bool:
+    def run_coder(self, agent: str, prompt: str, cwd: Path, *, opencode_model_override: str | None = None) -> bool:
         """Invokes the agent subprocess, returns True on success."""
         self.logger.info(f"Invoking coder: {agent}")
         try:
@@ -3441,12 +3450,13 @@ class AIRunner:
                     check=True,
                 )
             else:  # opencode
+                model = opencode_model_override or self.config.opencode_model
                 self.runner.run(
                     [
                         "opencode",
                         "run",
                         "-m",
-                        self.config.opencode_model,
+                        model,
                         "--dangerously-skip-permissions",
                         prompt,
                     ],
@@ -3482,7 +3492,7 @@ class AIRunner:
                 )
             else:  # opencode
                 result = self.runner.run(
-                    ["opencode", "run", "-m", self.config.opencode_model, prompt],
+                    ["opencode", "run", "-m", self.config.opencode_reviewer_model, prompt],
                     timeout=300,
                     check=True,
                 )
@@ -3495,6 +3505,8 @@ class AIRunner:
         """Test writer always uses a different model from coder."""
         if agent is None:
             agent = "gemini" if self._is_nested_claude_session() else "claude"
+        if agent == "opencode":
+            return self.run_coder(agent, prompt, cwd, opencode_model_override=self.config.opencode_test_writer_model)
         return self.run_coder(agent, prompt, cwd)
 
     def run_decompose(self, task: dict) -> list[dict]:
