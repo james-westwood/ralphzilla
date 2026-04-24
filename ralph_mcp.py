@@ -20,32 +20,29 @@ Usage:
 from __future__ import annotations
 
 import json
-import os
-
-# CRITICAL: Set MCP_LOG_LEVEL BEFORE importing mcp module to prevent
-# INFO logs from corrupting the JSON-RPC stdio protocol.
-# The mcp library uses RichHandler which logs to stderr by default,
-# causing 'Connection closed' errors in MCP clients.
-os.environ["MCP_LOG_LEVEL"] = "ERROR"
-
 import logging
+import os
 import signal
 import subprocess
 from pathlib import Path
 
-logging.basicConfig(level=logging.ERROR, handlers=[logging.NullHandler()])
+os.environ["MCP_LOG_LEVEL"] = "ERROR"
 
 import psutil
 from mcp.server.fastmcp import FastMCP
 
-# --- Constants ---
 REPO_DIR = Path(__file__).parent
 PRD_FILE = REPO_DIR / "prd.json"
 PROGRESS_FILE = REPO_DIR / "progress.txt"
 LOG_FILE = REPO_DIR / "ralph-loop.log"
 
-# --- MCP Server Initialization ---
 mcp = FastMCP("rzilla")
+
+# FastMCP.__init__ adds a RichHandler(stderr) to the root logger at INFO
+# level, which corrupts the JSON-RPC stdio transport. Remove it and set
+# root logger to ERROR to prevent any output leaking to stderr.
+logging.root.handlers = [logging.NullHandler()]
+logging.root.setLevel(logging.ERROR)
 
 
 # --- Helper Functions ---
