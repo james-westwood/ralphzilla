@@ -586,9 +586,7 @@ class TestMCPLoggingConfig:
             assert logger.level == logging.ERROR, (
                 f"{name} logger level={logger.level}, expected ERROR"
             )
-            assert logger.propagate is False, (
-                f"{name} logger propagate=True, would leak to root"
-            )
+            assert logger.propagate is False, f"{name} logger propagate=True, would leak to root"
 
     def test_server_produces_no_stderr_on_startup(self):
         """Server must emit nothing to stderr when launched with empty stdin."""
@@ -603,6 +601,4 @@ class TestMCPLoggingConfig:
             timeout=5,
             cwd=str(mcp_module.REPO_DIR),
         )
-        assert result.stderr == "", (
-            f"Unexpected stderr output: {result.stderr[:200]}"
-        )
+        assert result.stderr == "", f"Unexpected stderr output: {result.stderr[:200]}"
