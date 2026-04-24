@@ -8,6 +8,7 @@ the 8 MCP tools work correctly without touching real infrastructure.
 import json
 import signal
 import subprocess
+import sys
 from unittest.mock import MagicMock, Mock, patch
 
 # Import the module under test
@@ -39,7 +40,7 @@ class TestFindLatestSummary:
 
     def test_returns_none_when_no_summaries(self, tmp_path):
         """When no ralph-summary-*.md files exist, return None."""
-        with patch.object(mcp_module, "REPO_DIR", tmp_path):
+        with patch.object(mcp_module, "PROJECT_DIR", tmp_path):
             result = mcp_module._find_latest_summary()
             assert result is None
 
@@ -54,7 +55,7 @@ class TestFindLatestSummary:
         summary2.write_text("Newest summary")
         summary3.write_text("Middle summary")
 
-        with patch.object(mcp_module, "REPO_DIR", tmp_path):
+        with patch.object(mcp_module, "PROJECT_DIR", tmp_path):
             result = mcp_module._find_latest_summary()
             assert result == summary2
 
@@ -257,7 +258,7 @@ class TestRzillaSummary:
 
     def test_returns_no_summary_when_none_exists(self, tmp_path):
         """When no summary files exist, return appropriate message."""
-        with patch.object(mcp_module, "REPO_DIR", tmp_path):
+        with patch.object(mcp_module, "PROJECT_DIR", tmp_path):
             result = mcp_module.rzilla_summary()
             assert result == "No sprint summary found."
 
@@ -269,7 +270,7 @@ class TestRzillaSummary:
         summary1.write_text("# Old Summary")
         summary2.write_text("# Latest Sprint Summary\n\nCompleted 5 tasks.")
 
-        with patch.object(mcp_module, "REPO_DIR", tmp_path):
+        with patch.object(mcp_module, "PROJECT_DIR", tmp_path):
             result = mcp_module.rzilla_summary()
             assert result == "# Latest Sprint Summary\n\nCompleted 5 tasks."
 
@@ -590,9 +591,6 @@ class TestMCPLoggingConfig:
 
     def test_server_produces_no_stderr_on_startup(self):
         """Server must emit nothing to stderr when launched with empty stdin."""
-        import subprocess
-        import sys
-
         result = subprocess.run(
             [sys.executable, "-m", "ralph_mcp"],
             stdin=subprocess.DEVNULL,
@@ -602,3 +600,104 @@ class TestMCPLoggingConfig:
             cwd=str(mcp_module.REPO_DIR),
         )
         assert result.stderr == "", f"Unexpected stderr output: {result.stderr[:200]}"
+
+
+class TestRepoDirArg:
+    """Tests for --repo-dir CLI argument."""
+
+    def test_default_project_dir_is_repo_dir(self):
+        """Without --repo-dir, PROJECT_DIR equals REPO_DIR."""
+        assert mcp_module.PROJECT_DIR == mcp_module.REPO_DIR
+
+    def test_prd_file_derived_from_project_dir(self, tmp_path):
+        """PRD_FILE, PROGRESS_FILE, LOG_FILE derive from PROJECT_DIR."""
+        original_project_dir = mcp_module.PROJECT_DIR
+        try:
+            mcp_module._set_project_dir(tmp_path)
+
+            assert mcp_module.PROJECT_DIR == tmp_path
+            assert mcp_module.PRD_FILE == tmp_path / "prd.json"
+            assert mcp_module.PROGRESS_FILE == tmp_path / "progress.txt"
+            assert mcp_module.LOG_FILE == tmp_path / "ralph-loop.log"
+        finally:
+            mcp_module._set_project_dir(original_project_dir)
+
+    def test_read_prd_from_project_dir(self, tmp_path):
+        """_read_prd reads from PROJECT_DIR, not REPO_DIR."""
+        prd_data = {"tasks": [{"id": "EXT-01", "title": "External task"}]}
+        prd_file = tmp_path / "prd.json"
+        prd_file.write_text(json.dumps(prd_data))
+
+        with patch.object(mcp_module, "PRD_FILE", prd_file):
+            result = mcp_module._read_prd()
+        assert result == prd_data
+
+    def test_find_latest_summary_in_project_dir(self, tmp_path):
+        """_find_latest_summary searches PROJECT_DIR, not REPO_DIR."""
+        summary = tmp_path / "ralph-summary-2024-06-01.md"
+        summary.write_text("# Sprint summary")
+
+        with patch.object(mcp_module, "PROJECT_DIR", tmp_path):
+            result = mcp_module._find_latest_summary()
+        assert result == summary
+
+    def test_repo_dir_cli_arg(self, tmp_path):
+        """Server accepts --repo-dir and resolves paths accordingly."""
+        prd_data = {"tasks": [{"id": "P-01", "title": "Project task"}]}
+        prd_file = tmp_path / "prd.json"
+        prd_file.write_text(json.dumps(prd_data))
+
+        init_msg = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "1.0"},
+                },
+            }
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(mcp_module.REPO_DIR / "ralph_mcp.py"),
+                "--repo-dir",
+                str(tmp_path),
+            ],
+            input=init_msg,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.stderr == "", f"Unexpected stderr: {result.stderr[:200]}"
+        assert "rzilla" in result.stdout
+
+    def test_repo_dir_missing_value_exits(self):
+        """--repo-dir without a value prints error and exits."""
+        result = subprocess.run(
+            [sys.executable, str(mcp_module.REPO_DIR / "ralph_mcp.py"), "--repo-dir"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        assert result.returncode != 0
+        assert "--repo-dir" in result.stderr
+
+    def test_repo_dir_invalid_path_exits(self):
+        """--repo-dir with non-existent path prints error and exits."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(mcp_module.REPO_DIR / "ralph_mcp.py"),
+                "--repo-dir",
+                "/nonexistent/path/xyz",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        assert result.returncode != 0
+        assert "not a directory" in result.stderr

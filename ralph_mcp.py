@@ -17,6 +17,8 @@ Usage:
     uv run --extra mcp python ralph_mcp.py
     # For MCP client config (.mcp.json / opencode.json), use absolute venv path:
     # /path/to/ralphzilla/.venv/bin/python /path/to/ralphzilla/ralph_mcp.py
+    # To target a different project's prd.json:
+    #   ralph_mcp.py --repo-dir /path/to/project
 """
 
 from __future__ import annotations
@@ -26,18 +28,56 @@ import logging
 import os
 import signal
 import subprocess
+import sys
 from pathlib import Path
 
-os.environ["MCP_LOG_LEVEL"] = "ERROR"
+os.environ.setdefault("MCP_LOG_LEVEL", "ERROR")
 
 import psutil
 from mcp.server.fastmcp import FastMCP
 
 REPO_DIR = Path(__file__).parent
-PRD_FILE = REPO_DIR / "prd.json"
-PROGRESS_FILE = REPO_DIR / "progress.txt"
-LOG_FILE = REPO_DIR / "ralph-loop.log"
 
+
+def _set_project_dir(project_dir: Path) -> None:
+    global PROJECT_DIR, PRD_FILE, PROGRESS_FILE, LOG_FILE, _repo_dir_flag
+
+    PROJECT_DIR = project_dir
+    PRD_FILE = PROJECT_DIR / "prd.json"
+    PROGRESS_FILE = PROJECT_DIR / "progress.txt"
+    LOG_FILE = PROJECT_DIR / "ralph-loop.log"
+    _repo_dir_flag = ["--repo-dir", str(PROJECT_DIR)] if PROJECT_DIR != REPO_DIR else []
+
+
+def _parse_repo_dir_args(argv: list[str]) -> tuple[Path, list[str]]:
+    project_dir = REPO_DIR
+    cleaned_argv = [argv[0]]
+    i = 1
+
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--repo-dir":
+            if i + 1 >= len(argv):
+                print("Error: --repo-dir requires a path argument", file=sys.stderr)
+                sys.exit(1)
+            project_dir = Path(argv[i + 1]).expanduser().resolve()
+            if not project_dir.is_dir():
+                print(f"Error: --repo-dir {project_dir} is not a directory", file=sys.stderr)
+                sys.exit(1)
+            i += 2
+            continue
+        cleaned_argv.append(arg)
+        i += 1
+
+    return project_dir, cleaned_argv
+
+
+_set_project_dir(REPO_DIR)
+
+if __name__ == "__main__":
+    _project_dir_arg, _cleaned_argv = _parse_repo_dir_args(sys.argv)
+    _set_project_dir(_project_dir_arg)
+    sys.argv[:] = _cleaned_argv
 mcp = FastMCP("rzilla")
 
 
@@ -62,6 +102,7 @@ _configure_mcp_logging()
 
 # --- Helper Functions ---
 
+
 def _read_prd() -> dict:
     """Read and parse prd.json from disk."""
     if not PRD_FILE.exists():
@@ -72,7 +113,7 @@ def _read_prd() -> dict:
 
 def _find_latest_summary() -> Path | None:
     """Find the most recent ralph-summary-*.md file."""
-    summaries = sorted(REPO_DIR.glob("ralph-summary-*.md"))
+    summaries = sorted(PROJECT_DIR.glob("ralph-summary-*.md"))
     return summaries[-1] if summaries else None
 
 
@@ -101,6 +142,7 @@ def _get_rzilla_pid() -> int | None:
 
 
 # --- MCP Tools ---
+
 
 @mcp.tool(annotations={"readOnlyHint": True})
 def rzilla_status() -> str:
@@ -239,7 +281,7 @@ def rzilla_dry_run(task: str | None = None) -> str:
     Returns:
         stdout+stderr from the dry-run command
     """
-    cmd = ["uv", "run", "rzilla", "run", "--dry-run"]
+    cmd = ["uv", "run", "rzilla", "run", "--dry-run"] + _repo_dir_flag
     if task:
         cmd.extend(["--task", task])
 
@@ -285,7 +327,7 @@ def rzilla_run(
     Returns:
         JSON string with pid, message, and log_file path
     """
-    cmd = ["uv", "run", "rzilla", "run"]
+    cmd = ["uv", "run", "rzilla", "run"] + _repo_dir_flag
 
     if task:
         cmd.extend(["--task", task])
@@ -348,7 +390,7 @@ def rzilla_add(spec: str) -> str:
     Returns:
         Output from the rzilla add command
     """
-    cmd = ["uv", "run", "rzilla", "add", spec]
+    cmd = ["uv", "run", "rzilla", "add", spec] + _repo_dir_flag
 
     try:
         result = subprocess.run(
