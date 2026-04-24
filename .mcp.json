@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "rzilla": {
+      "command": "uv",
+      "args": ["run", "--extra", "mcp", "python", "ralph_mcp.py"],
+      "cwd": "/home/james/Programming/personal/ralphzilla"
+    }
+  }
+}

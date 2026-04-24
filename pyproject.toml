@@ -23,6 +23,10 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.9",
 ]
+mcp = [
+    "mcp[cli]>=1.0",
+    "psutil>=5.9",
+]
 
 [tool.setuptools]
 py-modules = ["ralph"]
