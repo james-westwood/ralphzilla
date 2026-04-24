@@ -6,13 +6,9 @@ the 8 MCP tools work correctly without touching real infrastructure.
 """
 
 import json
-import os
 import signal
 import subprocess
-from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
-
-import pytest
 
 # Import the module under test
 import ralph_mcp as mcp_module
@@ -138,8 +134,20 @@ class TestRzillaTasks:
         """Without filter, returns all tasks."""
         prd_data = {
             "tasks": [
-                {"id": "TASK-01", "title": "Task 1", "completed": True, "owner": "ralph", "priority": 1},
-                {"id": "TASK-02", "title": "Task 2", "completed": False, "owner": "ralph", "priority": 2},
+                {
+                    "id": "TASK-01",
+                    "title": "Task 1",
+                    "completed": True,
+                    "owner": "ralph",
+                    "priority": 1,
+                },
+                {
+                    "id": "TASK-02",
+                    "title": "Task 2",
+                    "completed": False,
+                    "owner": "ralph",
+                    "priority": 2,
+                },
             ]
         }
         prd_file = tmp_path / "prd.json"
@@ -157,8 +165,20 @@ class TestRzillaTasks:
         """Filter=pending returns only incomplete tasks."""
         prd_data = {
             "tasks": [
-                {"id": "TASK-01", "title": "Task 1", "completed": True, "owner": "ralph", "priority": 1},
-                {"id": "TASK-02", "title": "Task 2", "completed": False, "owner": "ralph", "priority": 2},
+                {
+                    "id": "TASK-01",
+                    "title": "Task 1",
+                    "completed": True,
+                    "owner": "ralph",
+                    "priority": 1,
+                },
+                {
+                    "id": "TASK-02",
+                    "title": "Task 2",
+                    "completed": False,
+                    "owner": "ralph",
+                    "priority": 2,
+                },
             ]
         }
         prd_file = tmp_path / "prd.json"
@@ -176,7 +196,13 @@ class TestRzillaTasks:
         """Limit parameter limits number of tasks returned."""
         prd_data = {
             "tasks": [
-                {"id": f"TASK-{i:02d}", "title": f"Task {i}", "completed": False, "owner": "ralph", "priority": i}
+                {
+                    "id": f"TASK-{i:02d}",
+                    "title": f"Task {i}",
+                    "completed": False,
+                    "owner": "ralph",
+                    "priority": i,
+                }
                 for i in range(1, 11)  # 10 tasks
             ]
         }
@@ -407,7 +433,13 @@ class TestMCPAnnotations:
 
     def test_readonly_tools_marked(self):
         """Read-only tools have readOnlyHint=True."""
-        readonly_tools = ["rzilla_status", "rzilla_tasks", "rzilla_log", "rzilla_summary", "rzilla_dry_run"]
+        readonly_tools = [
+            "rzilla_status",
+            "rzilla_tasks",
+            "rzilla_log",
+            "rzilla_summary",
+            "rzilla_dry_run",
+        ]
 
         for tool_name in readonly_tools:
             tool = getattr(mcp_module, tool_name)
@@ -444,10 +476,34 @@ class TestIntegrationEdgeCases:
         """Status correctly identifies next task with complex dependencies."""
         prd_data = {
             "tasks": [
-                {"id": "TASK-01", "title": "Base", "completed": True, "owner": "ralph", "depends_on": []},
-                {"id": "TASK-02", "title": "Depends on base", "completed": False, "owner": "ralph", "depends_on": ["TASK-01"]},
-                {"id": "TASK-03", "title": "Depends on incomplete", "completed": False, "owner": "ralph", "depends_on": ["TASK-04"]},
-                {"id": "TASK-04", "title": "Not done yet", "completed": False, "owner": "ralph", "depends_on": []},
+                {
+                    "id": "TASK-01",
+                    "title": "Base",
+                    "completed": True,
+                    "owner": "ralph",
+                    "depends_on": [],
+                },
+                {
+                    "id": "TASK-02",
+                    "title": "Depends on base",
+                    "completed": False,
+                    "owner": "ralph",
+                    "depends_on": ["TASK-01"],
+                },
+                {
+                    "id": "TASK-03",
+                    "title": "Depends on incomplete",
+                    "completed": False,
+                    "owner": "ralph",
+                    "depends_on": ["TASK-04"],
+                },
+                {
+                    "id": "TASK-04",
+                    "title": "Not done yet",
+                    "completed": False,
+                    "owner": "ralph",
+                    "depends_on": [],
+                },
             ]
         }
         prd_file = tmp_path / "prd.json"
