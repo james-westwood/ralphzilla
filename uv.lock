@@ -652,6 +652,8 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "mcp", extra = ["cli"] },
+    { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -664,7 +666,9 @@ mcp = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
+    { name = "mcp", extras = ["cli"], marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "mcp", extras = ["cli"], marker = "extra == 'mcp'", specifier = ">=1.0" },
+    { name = "psutil", marker = "extra == 'dev'", specifier = ">=5.9" },
     { name = "psutil", marker = "extra == 'mcp'", specifier = ">=5.9" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
