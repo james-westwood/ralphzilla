@@ -102,6 +102,8 @@ class TestCLIFlags:
             "gemini_only",
             "opencode_only",
             "opencode_model",
+            "opencode_reviewer_model",
+            "opencode_test_writer_model",
             "resume",
             "max_test_fix_rounds",
             "max_test_write_rounds",

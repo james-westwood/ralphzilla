@@ -311,6 +311,8 @@ def rzilla_run(
     skip_review: bool = False,
     opencode_only: bool = False,
     opencode_model: str | None = None,
+    opencode_reviewer_model: str | None = None,
+    opencode_test_writer_model: str | None = None,
     resume: bool = False,
     max_iterations: int = 10,
 ) -> str:
@@ -320,7 +322,9 @@ def rzilla_run(
         task: Optional specific task ID to run (default: None = next pending)
         skip_review: Skip AI review phase (default: False)
         opencode_only: Use only opencode models (default: False)
-        opencode_model: Specific opencode model to use (default: None)
+        opencode_model: Specific opencode coder model to use (default: None)
+        opencode_reviewer_model: Specific opencode reviewer model (default: None)
+        opencode_test_writer_model: Specific opencode test-writer model (default: None)
         resume: Resume from existing branch (default: False)
         max_iterations: Maximum sprint iterations (default: 10)
 
@@ -337,6 +341,10 @@ def rzilla_run(
         cmd.append("--opencode-only")
     if opencode_model:
         cmd.extend(["--opencode-model", opencode_model])
+    if opencode_reviewer_model:
+        cmd.extend(["--opencode-reviewer-model", opencode_reviewer_model])
+    if opencode_test_writer_model:
+        cmd.extend(["--opencode-test-writer-model", opencode_test_writer_model])
     if resume:
         cmd.append("--resume")
     if max_iterations != 10:

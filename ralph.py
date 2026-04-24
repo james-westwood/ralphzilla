@@ -52,7 +52,9 @@ LOG_FILE_NAME = "ralph.log"
 PRD_FILE = "prd.json"
 PROGRESS_FILE = "progress.txt"
 SUMMARY_FILE_PREFIX = "ralph-summary"
-DEFAULT_OPENCODE_MODEL = "opencode/kimi-k2.5"
+DEFAULT_OPENCODE_MODEL = "opencode/big-pickle"
+DEFAULT_OPENCODE_REVIEWER_MODEL = "opencode/kimi-k2.5"
+DEFAULT_OPENCODE_TEST_WRITER_MODEL = "opencode/minimax-m2.7"
 GEMINI_MODEL = "gemini-2.5-pro"
 ESCALATIONS_FILE = ".ralph/escalations.json"
 MAX_RETRIES_PER_BLOCKER = 3
@@ -332,6 +334,8 @@ class Config:
     claude_only: bool = False
     gemini_only: bool = False
     opencode_only: bool = False
+    opencode_reviewer_model: str = DEFAULT_OPENCODE_REVIEWER_MODEL
+    opencode_test_writer_model: str = DEFAULT_OPENCODE_TEST_WRITER_MODEL
     validate_plan: bool = False  # Tier 2 AI sanity check on prd.json
     max_workers: int | None = None  # WaveExecutor parallelism cap (None = CPU count)
     workstream: str | None = None  # Optional prefix for worktree branch names
@@ -956,7 +960,10 @@ class ReviewQualityChecker:
             return result, ""
 
         self.logger.warn(f"Review quality check failed: {result.reason}")
-        available_agents = ["gemini", "opencode", "claude"]
+        if self.config.opencode_only:
+            available_agents = ["opencode", "gemini", "claude"]
+        else:
+            available_agents = ["gemini", "opencode", "claude"]
         retry_agent = available_agents[(round_num + 1) % len(available_agents)]
         return result, retry_agent
 
@@ -1024,13 +1031,11 @@ class ReviewLoop:
             if not review_text:
                 self.logger.error(f"Reviewer {current_reviewer} returned no output")
                 previous_reviews.append("")
-                current_reviewer = (
-                    "gemini"
-                    if current_reviewer == "claude"
-                    else "opencode"
-                    if current_reviewer == "gemini"
-                    else "claude"
-                )
+                if self.config.opencode_only:
+                    _fallback = {"opencode": "gemini", "gemini": "claude", "claude": "opencode"}
+                else:
+                    _fallback = {"claude": "gemini", "gemini": "opencode", "opencode": "claude"}
+                current_reviewer = _fallback.get(current_reviewer, current_reviewer)
                 continue
 
             previous_reviews.append(review_text)
@@ -3373,7 +3378,7 @@ class AIRunner:
         if self.config.gemini_only:
             return "gemini", "claude", "opencode"
         if self.config.opencode_only:
-            return "opencode", "claude", "gemini"
+            return "opencode", "opencode", "opencode"
 
         complexity = task.get("complexity") or 1
         # Complexity mapping from DESIGN.md
@@ -3419,7 +3424,14 @@ class AIRunner:
         result = re.sub(r"\n{3,}", "\n\n", result)
         return result.strip()
 
-    def run_coder(self, agent: str, prompt: str, cwd: Path) -> bool:
+    def run_coder(
+        self,
+        agent: str,
+        prompt: str,
+        cwd: Path,
+        *,
+        opencode_model_override: str | None = None,
+    ) -> bool:
         """Invokes the agent subprocess, returns True on success."""
         self.logger.info(f"Invoking coder: {agent}")
         try:
@@ -3437,12 +3449,13 @@ class AIRunner:
                     check=True,
                 )
             else:  # opencode
+                model = opencode_model_override or self.config.opencode_model
                 self.runner.run(
                     [
                         "opencode",
                         "run",
                         "-m",
-                        self.config.opencode_model,
+                        model,
                         "--dangerously-skip-permissions",
                         prompt,
                     ],
@@ -3478,7 +3491,7 @@ class AIRunner:
                 )
             else:  # opencode
                 result = self.runner.run(
-                    ["opencode", "run", "-m", self.config.opencode_model, prompt],
+                    ["opencode", "run", "-m", self.config.opencode_reviewer_model, prompt],
                     timeout=300,
                     check=True,
                 )
@@ -3491,6 +3504,13 @@ class AIRunner:
         """Test writer always uses a different model from coder."""
         if agent is None:
             agent = "gemini" if self._is_nested_claude_session() else "claude"
+        if agent == "opencode":
+            return self.run_coder(
+                agent,
+                prompt,
+                cwd,
+                opencode_model_override=self.config.opencode_test_writer_model,
+            )
         return self.run_coder(agent, prompt, cwd)
 
     def run_decompose(self, task: dict) -> list[dict]:
@@ -4690,7 +4710,20 @@ def cli():
 @click.option(
     "--opencode-model",
     default=DEFAULT_OPENCODE_MODEL,
-    help="Override opencode model (default: opencode/kimi-k2.5)",
+    show_default=True,
+    help="Override opencode coder model",
+)
+@click.option(
+    "--opencode-reviewer-model",
+    default=DEFAULT_OPENCODE_REVIEWER_MODEL,
+    show_default=True,
+    help="Override opencode reviewer model",
+)
+@click.option(
+    "--opencode-test-writer-model",
+    default=DEFAULT_OPENCODE_TEST_WRITER_MODEL,
+    show_default=True,
+    help="Override opencode test-writer model",
 )
 @click.option(
     "--resume",
@@ -4770,6 +4803,8 @@ def run(
     gemini_only: bool,
     opencode_only: bool,
     opencode_model: str,
+    opencode_reviewer_model: str,
+    opencode_test_writer_model: str,
     resume: bool,
     max_test_fix_rounds: int,
     max_test_write_rounds: int,
@@ -4794,6 +4829,8 @@ def run(
         tdd_mode=tdd_mode,
         model_mode="random",
         opencode_model=opencode_model,
+        opencode_reviewer_model=opencode_reviewer_model,
+        opencode_test_writer_model=opencode_test_writer_model,
         resume=resume,
         repo_dir=repo_dir,
         log_file=log_file,

@@ -35,3 +35,9 @@ uv sync --extra dev
 uv run pytest tests/ -v
 uv run ruff check ralph.py tests/
 ```
+
+## GitHub workflow
+
+- Request Copilot PR review: `gh pr edit PR-NUMBER --add-reviewer @copilot`
+- Always commit with `--no-verify` — the pre-commit hook switches HEAD to main, losing the feature branch. Run `uv run ruff check` and `uv run pytest` manually instead.
+- After committing on the wrong branch, cherry-pick to the correct branch and reset the wrong one: `git checkout feat/X && git cherry-pick SHA && git branch -f main <clean-sha>`

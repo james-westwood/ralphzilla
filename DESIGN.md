@@ -66,8 +66,10 @@ MAIN_BRANCH                  = "main"
 LOG_FILE_NAME                = "ralph.log"
 PRD_FILE                     = "prd.json"
 PROGRESS_FILE                = "progress.txt"
-DEFAULT_OPENCODE_MODEL       = "opencode/kimi-k2.5"
-GEMINI_MODEL                 = "gemini-2.5-pro"
+DEFAULT_OPENCODE_MODEL             = "opencode/big-pickle"
+DEFAULT_OPENCODE_REVIEWER_MODEL     = "opencode/kimi-k2.5"
+DEFAULT_OPENCODE_TEST_WRITER_MODEL  = "opencode/minimax-m2.7"
+GEMINI_MODEL                        = "gemini-2.5-pro"
 ```
 
 ---
@@ -99,6 +101,8 @@ class PlanInvalidError(RalphError): pass     # plan-checker found structural vio
     tdd_mode: bool           # per-sprint TDD flag (--tdd); test writer ≠ coder agent
     model_mode: str          # "random" | "claude" | "gemini" | "opencode"
     opencode_model: str
+    opencode_reviewer_model: str   # opencode model for reviewer role
+    opencode_test_writer_model: str  # opencode model for test-writer role
     resume: bool
     repo_dir: Path
     log_file: Path
@@ -332,12 +336,13 @@ The coder prompt explicitly states: *"Do NOT touch prd.json or progress.txt — 
 The prompt must end with: *"Output exactly `APPROVED` or `CHANGES REQUESTED` followed by specific file+line feedback. Do not output general comments without a file and line number."*
 
 ### `AIRunner`
-Three coder backends + three reviewer backends. Each has a primary attempt and one fallback. The `env_removals=["CLAUDECODE"]` trick is applied to all Claude calls.
+Three opencode model roles (coder, reviewer, test_writer) plus Claude and Gemini backends. When `--opencode-only` is set, all three roles use opencode with separate models: `opencode_model` for coding, `opencode_reviewer_model` for review, and `opencode_test_writer_model` for test writing. Claude is a last-resort fallback, not the default reviewer.
 
 ```python
-def assign_agents(self) -> tuple[str, str]   # (coder, reviewer)
-def run_coder(self, agent, prompt) -> bool
+def assign_agents(self, task) -> tuple[str, str, str]  # (coder, reviewer, test_writer)
+def run_coder(self, agent, prompt, cwd, *, opencode_model_override=None) -> bool
 def run_reviewer(self, agent, prompt) -> str
+def run_test_writer(self, prompt, cwd, agent=None) -> bool
 ```
 
 ### `PreCommitGate`
@@ -550,9 +555,11 @@ rzilla [OPTIONS]          # installed via pipx
 --tdd                 TDD mode: separate test-writer agent writes tests before coder
 --claude-only         Claude for all agent roles
 --gemini-only         Gemini for all agent roles
---opencode-only       opencode for all agent roles
---opencode-model STR  Override opencode model (default: opencode/kimi-k2.5)
---resume              Resume stale branches from interrupted runs
+--opencode-only              opencode for all agent roles
+--opencode-model STR         Override opencode coder model (default: opencode/big-pickle)
+--opencode-reviewer-model STR Override opencode reviewer model (default: opencode/kimi-k2.5)
+--opencode-test-writer-model STR Override opencode test-writer model (default: opencode/minimax-m2.7)
+--resume                     Resume stale branches from interrupted runs
 --max-test-fix-rounds N       Max AI fix rounds for test failures (default: 2)
 --max-test-write-rounds N     TDD: max rounds to get hollow-free tests (default: 2)
 --task TASK_ID        Force a specific task

@@ -354,7 +354,9 @@ class TestRzillaRun:
                     task="TASK-01",
                     skip_review=True,
                     opencode_only=True,
-                    opencode_model="opencode/kimi-k2.5",
+                    opencode_model="opencode/big-pickle",
+                    opencode_reviewer_model="opencode/kimi-k2.5",
+                    opencode_test_writer_model="opencode/minimax-m2.7",
                     resume=True,
                     max_iterations=5,
                 )
@@ -365,7 +367,11 @@ class TestRzillaRun:
         assert "--skip-review" in call_args
         assert "--opencode-only" in call_args
         assert "--opencode-model" in call_args
+        assert "opencode/big-pickle" in call_args
+        assert "--opencode-reviewer-model" in call_args
         assert "opencode/kimi-k2.5" in call_args
+        assert "--opencode-test-writer-model" in call_args
+        assert "opencode/minimax-m2.7" in call_args
         assert "--resume" in call_args
         assert "--max" in call_args
         assert "5" in call_args
