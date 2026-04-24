@@ -13,29 +13,51 @@ Exposes 8 MCP tools for monitoring and controlling the ralphzilla sprint loop:
 - rzilla_abort: Abort running sprint
 
 Usage:
+    # From ralphzilla repo only:
     uv run --extra mcp python ralph_mcp.py
-    # or via MCP client with .mcp.json configuration
+    # For MCP client config (.mcp.json / opencode.json), use absolute venv path:
+    # /path/to/ralphzilla/.venv/bin/python /path/to/ralphzilla/ralph_mcp.py
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import subprocess
 from pathlib import Path
 
+os.environ["MCP_LOG_LEVEL"] = "ERROR"
+
 import psutil
 from mcp.server.fastmcp import FastMCP
 
-# --- Constants ---
 REPO_DIR = Path(__file__).parent
 PRD_FILE = REPO_DIR / "prd.json"
 PROGRESS_FILE = REPO_DIR / "progress.txt"
 LOG_FILE = REPO_DIR / "ralph-loop.log"
 
-# --- MCP Server Initialization ---
 mcp = FastMCP("rzilla")
+
+
+def _configure_mcp_logging() -> None:
+    root_logger = logging.getLogger()
+    for handler in list(root_logger.handlers):
+        if (
+            handler.__class__.__module__ == "rich.logging"
+            and handler.__class__.__name__ == "RichHandler"
+        ):
+            root_logger.removeHandler(handler)
+
+    for logger_name in ("mcp", "mcp.server.fastmcp"):
+        logger = logging.getLogger(logger_name)
+        logger.handlers = [logging.NullHandler()]
+        logger.setLevel(logging.ERROR)
+        logger.propagate = False
+
+
+_configure_mcp_logging()
 
 
 # --- Helper Functions ---

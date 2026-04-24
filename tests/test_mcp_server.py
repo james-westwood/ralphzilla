@@ -562,3 +562,43 @@ try:
     import psutil
 except ImportError:
     psutil = None
+
+
+class TestMCPLoggingConfig:
+    """Tests that MCP logging does not corrupt stdio transport."""
+
+    def test_no_rich_handler_on_root_logger(self):
+        """RichHandler must be removed from root logger after module init."""
+        import logging
+
+        for handler in logging.root.handlers:
+            assert not (
+                handler.__class__.__module__ == "rich.logging"
+                and handler.__class__.__name__ == "RichHandler"
+            ), f"RichHandler still present on root logger: {handler}"
+
+    def test_mcp_loggers_silenced(self):
+        """MCP loggers must be at ERROR level with propagate=False."""
+        import logging
+
+        for name in ("mcp", "mcp.server.fastmcp"):
+            logger = logging.getLogger(name)
+            assert logger.level == logging.ERROR, (
+                f"{name} logger level={logger.level}, expected ERROR"
+            )
+            assert logger.propagate is False, f"{name} logger propagate=True, would leak to root"
+
+    def test_server_produces_no_stderr_on_startup(self):
+        """Server must emit nothing to stderr when launched with empty stdin."""
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, "-m", "ralph_mcp"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=str(mcp_module.REPO_DIR),
+        )
+        assert result.stderr == "", f"Unexpected stderr output: {result.stderr[:200]}"

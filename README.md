@@ -87,6 +87,59 @@ ralph --dry-run
 
 ---
 
+## MCP Server
+
+Ralphzilla ships an MCP server (`ralph_mcp.py`) that exposes 8 tools for monitoring and controlling sprints from any MCP-compatible editor (opencode, Claude Code, etc.).
+
+### Tools
+
+| Tool | Read-only | Description |
+|---|---|---|
+| `rzilla_status` | Yes | Sprint status overview (pending/completed/running) |
+| `rzilla_tasks` | Yes | List tasks with filtering |
+| `rzilla_log` | Yes | Last N lines of progress log |
+| `rzilla_summary` | Yes | Latest sprint summary markdown |
+| `rzilla_dry_run` | Yes | Preview what a sprint would do |
+| `rzilla_run` | No | Start a sprint as background process |
+| `rzilla_add` | No | Add a task to the backlog |
+| `rzilla_abort` | No | Abort running sprint |
+
+### Setup for opencode
+
+Add to `~/.config/opencode/opencode.json` (global) or your project's local config:
+
+```json
+{
+  "mcp": {
+    "rzilla": {
+      "type": "local",
+      "command": ["/abs/path/to/ralphzilla/.venv/bin/python", "/abs/path/to/ralphzilla/ralph_mcp.py"],
+      "enabled": true
+    }
+  }
+}
+```
+
+> **Important**: Use the absolute path to the venv Python binary, **not** `uv run --extra mcp`. The `uv run` command resolves extras from the current project's `pyproject.toml`, so it fails when opencode starts from a different directory.
+
+### Setup for other MCP clients
+
+Create a `.mcp.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "rzilla": {
+      "command": "/abs/path/to/ralphzilla/.venv/bin/python",
+      "args": ["/abs/path/to/ralphzilla/ralph_mcp.py"],
+      "cwd": "/abs/path/to/ralphzilla"
+    }
+  }
+}
+```
+
+---
+
 ## Roadmap
 
 See [roadmap.md](roadmap.md) for the full milestone plan.
