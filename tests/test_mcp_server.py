@@ -591,9 +591,6 @@ class TestMCPLoggingConfig:
 
     def test_server_produces_no_stderr_on_startup(self):
         """Server must emit nothing to stderr when launched with empty stdin."""
-        import subprocess
-        import sys
-
         result = subprocess.run(
             [sys.executable, "-m", "ralph_mcp"],
             stdin=subprocess.DEVNULL,
@@ -614,20 +611,16 @@ class TestRepoDirArg:
 
     def test_prd_file_derived_from_project_dir(self, tmp_path):
         """PRD_FILE, PROGRESS_FILE, LOG_FILE derive from PROJECT_DIR."""
-        import importlib
-
-        original_argv = sys.argv[:]
+        original_project_dir = mcp_module.PROJECT_DIR
         try:
-            sys.argv = [original_argv[0], "--repo-dir", str(tmp_path)]
-            importlib.reload(mcp_module)
+            mcp_module._set_project_dir(tmp_path)
 
             assert mcp_module.PROJECT_DIR == tmp_path
             assert mcp_module.PRD_FILE == tmp_path / "prd.json"
             assert mcp_module.PROGRESS_FILE == tmp_path / "progress.txt"
             assert mcp_module.LOG_FILE == tmp_path / "ralph-loop.log"
         finally:
-            sys.argv = original_argv
-            importlib.reload(mcp_module)
+            mcp_module._set_project_dir(original_project_dir)
 
     def test_read_prd_from_project_dir(self, tmp_path):
         """_read_prd reads from PROJECT_DIR, not REPO_DIR."""
@@ -650,9 +643,6 @@ class TestRepoDirArg:
 
     def test_repo_dir_cli_arg(self, tmp_path):
         """Server accepts --repo-dir and resolves paths accordingly."""
-        import subprocess
-        import sys
-
         prd_data = {"tasks": [{"id": "P-01", "title": "Project task"}]}
         prd_file = tmp_path / "prd.json"
         prd_file.write_text(json.dumps(prd_data))
@@ -687,9 +677,6 @@ class TestRepoDirArg:
 
     def test_repo_dir_missing_value_exits(self):
         """--repo-dir without a value prints error and exits."""
-        import subprocess
-        import sys
-
         result = subprocess.run(
             [sys.executable, str(mcp_module.REPO_DIR / "ralph_mcp.py"), "--repo-dir"],
             capture_output=True,
@@ -701,9 +688,6 @@ class TestRepoDirArg:
 
     def test_repo_dir_invalid_path_exits(self):
         """--repo-dir with non-existent path prints error and exits."""
-        import subprocess
-        import sys
-
         result = subprocess.run(
             [
                 sys.executable,
