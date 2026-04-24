@@ -38,26 +38,46 @@ from mcp.server.fastmcp import FastMCP
 
 REPO_DIR = Path(__file__).parent
 
-_repo_dir_arg = REPO_DIR
-for i, arg in enumerate(sys.argv[1:], 1):
-    if arg == "--repo-dir":
-        if i >= len(sys.argv) - 1:
-            print("Error: --repo-dir requires a path argument", file=sys.stderr)
-            sys.exit(1)
-        _repo_dir_arg = Path(sys.argv[i + 1]).expanduser().resolve()
-        if not _repo_dir_arg.is_dir():
-            print(f"Error: --repo-dir {_repo_dir_arg} is not a directory", file=sys.stderr)
-            sys.exit(1)
-        sys.argv[i : i + 2] = []
-        break
 
-PROJECT_DIR = _repo_dir_arg
-PRD_FILE = PROJECT_DIR / "prd.json"
-PROGRESS_FILE = PROJECT_DIR / "progress.txt"
-LOG_FILE = PROJECT_DIR / "ralph-loop.log"
+def _set_project_dir(project_dir: Path) -> None:
+    global PROJECT_DIR, PRD_FILE, PROGRESS_FILE, LOG_FILE, _repo_dir_flag
 
-_repo_dir_flag = ["--repo-dir", str(PROJECT_DIR)] if PROJECT_DIR != REPO_DIR else []
+    PROJECT_DIR = project_dir
+    PRD_FILE = PROJECT_DIR / "prd.json"
+    PROGRESS_FILE = PROJECT_DIR / "progress.txt"
+    LOG_FILE = PROJECT_DIR / "ralph-loop.log"
+    _repo_dir_flag = ["--repo-dir", str(PROJECT_DIR)] if PROJECT_DIR != REPO_DIR else []
 
+
+def _parse_repo_dir_args(argv: list[str]) -> tuple[Path, list[str]]:
+    project_dir = REPO_DIR
+    cleaned_argv = [argv[0]]
+    i = 1
+
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--repo-dir":
+            if i + 1 >= len(argv):
+                print("Error: --repo-dir requires a path argument", file=sys.stderr)
+                sys.exit(1)
+            project_dir = Path(argv[i + 1]).expanduser().resolve()
+            if not project_dir.is_dir():
+                print(f"Error: --repo-dir {project_dir} is not a directory", file=sys.stderr)
+                sys.exit(1)
+            i += 2
+            continue
+        cleaned_argv.append(arg)
+        i += 1
+
+    return project_dir, cleaned_argv
+
+
+_set_project_dir(REPO_DIR)
+
+if __name__ == "__main__":
+    _project_dir_arg, _cleaned_argv = _parse_repo_dir_args(sys.argv)
+    _set_project_dir(_project_dir_arg)
+    sys.argv[:] = _cleaned_argv
 mcp = FastMCP("rzilla")
 
 
