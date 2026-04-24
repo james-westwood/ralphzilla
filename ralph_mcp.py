@@ -28,7 +28,7 @@ import signal
 import subprocess
 from pathlib import Path
 
-os.environ.setdefault("MCP_LOG_LEVEL", "ERROR")
+os.environ["MCP_LOG_LEVEL"] = "ERROR"
 
 import psutil
 from mcp.server.fastmcp import FastMCP
