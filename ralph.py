@@ -52,7 +52,9 @@ LOG_FILE_NAME = "ralph.log"
 PRD_FILE = "prd.json"
 PROGRESS_FILE = "progress.txt"
 SUMMARY_FILE_PREFIX = "ralph-summary"
-DEFAULT_OPENCODE_MODEL = "opencode/kimi-k2.5"
+DEFAULT_OPENCODE_MODEL = "opencode/big-pickle"
+DEFAULT_OPENCODE_REVIEWER_MODEL = "opencode/kimi-k2.5"
+DEFAULT_OPENCODE_TEST_WRITER_MODEL = "opencode/minimax-m2.7"
 GEMINI_MODEL = "gemini-2.5-pro"
 ESCALATIONS_FILE = ".ralph/escalations.json"
 MAX_RETRIES_PER_BLOCKER = 3
@@ -332,6 +334,8 @@ class Config:
     claude_only: bool = False
     gemini_only: bool = False
     opencode_only: bool = False
+    opencode_reviewer_model: str = DEFAULT_OPENCODE_REVIEWER_MODEL
+    opencode_test_writer_model: str = DEFAULT_OPENCODE_TEST_WRITER_MODEL
     validate_plan: bool = False  # Tier 2 AI sanity check on prd.json
     max_workers: int | None = None  # WaveExecutor parallelism cap (None = CPU count)
     workstream: str | None = None  # Optional prefix for worktree branch names
