@@ -34,13 +34,12 @@ def test_assign_agents_overrides():
     config.gemini_only = False
     config.opencode_only = True
     coder, rev, tw = ai.assign_agents({})
-    assert (coder, rev) == ("opencode", "claude")
-    assert tw == "gemini"
+    assert (coder, rev, tw) == ("opencode", "opencode", "opencode")
 
 
 def test_run_coder_claude():
     runner = MagicMock()
-    config = MagicMock(opencode_model="kimi")
+    config = MagicMock(opencode_model="kimi", opencode_test_writer_model="opencode/minimax-m2.7")
     ai = AIRunner(runner, MagicMock(), config)
 
     ai.run_coder("claude", "prompt", Path("."))
@@ -56,7 +55,7 @@ def test_run_coder_claude():
 def test_run_reviewer_nested_fallback():
     runner = MagicMock()
     runner.run.return_value.stdout = "Review content"
-    config = MagicMock(opencode_model="kimi")
+    config = MagicMock(opencode_model="kimi", opencode_reviewer_model="opencode/kimi-k2.5")
     ai = AIRunner(runner, MagicMock(), config)
 
     with patch.dict(os.environ, {"CLAUDECODE": "1"}):
@@ -117,7 +116,7 @@ def test_assign_agents_complexity_routing():
 def test_run_reviewer_claude_removes_claudecode():
     runner = MagicMock()
     runner.run.return_value.stdout = "Review output"
-    config = MagicMock(opencode_model="kimi")
+    config = MagicMock(opencode_model="kimi", opencode_reviewer_model="opencode/kimi-k2.5")
     ai = AIRunner(runner, MagicMock(), config)
 
     with patch.dict(os.environ, {}, clear=True):
@@ -130,7 +129,7 @@ def test_run_reviewer_claude_removes_claudecode():
 def test_run_test_writer_uses_different_model():
     runner = MagicMock()
     runner.run.return_value.stdout = "Tests written"
-    config = MagicMock(opencode_model="kimi")
+    config = MagicMock(opencode_model="kimi", opencode_test_writer_model="opencode/minimax-m2.7")
     logger = MagicMock()
     ai = AIRunner(runner, logger, config)
 
@@ -138,3 +137,69 @@ def test_run_test_writer_uses_different_model():
 
     call_args = runner.run.call_args[0][0]
     assert call_args[0] in ("claude", "gemini")
+
+
+def test_run_reviewer_opencode_uses_reviewer_model():
+    """When agent=opencode, run_reviewer uses opencode_reviewer_model not opencode_model."""
+    runner = MagicMock()
+    runner.run.return_value.stdout = "Review content"
+    config = MagicMock(
+        opencode_model="opencode/big-pickle",
+        opencode_reviewer_model="opencode/kimi-k2.5",
+    )
+    ai = AIRunner(runner, MagicMock(), config)
+
+    with patch.dict(os.environ, {}, clear=True):
+        ai.run_reviewer("opencode", "review prompt")
+
+    call_args = runner.run.call_args[0][0]
+    assert call_args == ["opencode", "run", "-m", "opencode/kimi-k2.5", "review prompt"]
+
+
+def test_run_coder_opencode_uses_coder_model():
+    """When agent=opencode, run_coder uses opencode_model (coder model)."""
+    runner = MagicMock()
+    config = MagicMock(
+        opencode_model="opencode/big-pickle",
+        opencode_reviewer_model="opencode/kimi-k2.5",
+        opencode_test_writer_model="opencode/minimax-m2.7",
+    )
+    ai = AIRunner(runner, MagicMock(), config)
+
+    ai.run_coder("opencode", "code prompt", Path("."))
+
+    call_args = runner.run.call_args[0][0]
+    assert call_args[3] == "opencode/big-pickle"
+
+
+def test_run_coder_opencode_model_override():
+    """opencode_model_override takes precedence over config.opencode_model."""
+    runner = MagicMock()
+    config = MagicMock(
+        opencode_model="opencode/big-pickle",
+        opencode_test_writer_model="opencode/minimax-m2.7",
+    )
+    ai = AIRunner(runner, MagicMock(), config)
+
+    ai.run_coder(
+        "opencode", "test prompt", Path("."),
+        opencode_model_override="opencode/minimax-m2.7",
+    )
+
+    call_args = runner.run.call_args[0][0]
+    assert call_args[3] == "opencode/minimax-m2.7"
+
+
+def test_run_test_writer_opencode_uses_test_writer_model():
+    """When agent=opencode, run_test_writer passes opencode_test_writer_model."""
+    runner = MagicMock()
+    config = MagicMock(
+        opencode_model="opencode/big-pickle",
+        opencode_test_writer_model="opencode/minimax-m2.7",
+    )
+    ai = AIRunner(runner, MagicMock(), config)
+
+    ai.run_test_writer("test prompt", Path("."), agent="opencode")
+
+    call_args = runner.run.call_args[0][0]
+    assert call_args[3] == "opencode/minimax-m2.7"
