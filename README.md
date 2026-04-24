@@ -113,14 +113,14 @@ Add to `~/.config/opencode/opencode.json` (global) or your project's local confi
   "mcp": {
     "rzilla": {
       "type": "local",
-      "command": ["/abs/path/to/ralphzilla/.venv/bin/python", "/abs/path/to/ralphzilla/ralph_mcp.py", "--project-dir", "/abs/path/to/your/project"],
+      "command": ["/abs/path/to/ralphzilla/.venv/bin/python", "/abs/path/to/ralphzilla/ralph_mcp.py", "--repo-dir", "/abs/path/to/your/project"],
       "enabled": true
     }
   }
 }
 ```
 
-> **Important**: Use the absolute path to the venv Python binary, **not** `uv run --extra mcp`. The `uv run` command resolves extras from the current project's `pyproject.toml`, so it fails when opencode starts from a different directory.
+> **Important**: Use the absolute path to the venv Python binary, **not** `uv run --extra mcp`. The `uv run` command resolves extras from the current project's `pyproject.toml`, so it fails when opencode starts from a different directory. Keep `cwd` pointed at the ralphzilla checkout — `--repo-dir` tells rzilla which repo to operate on, but subprocesses still run from the ralphzilla environment.
 
 ### Setup for other MCP clients
 
@@ -131,14 +131,14 @@ Create a `.mcp.json` in your project root:
   "mcpServers": {
     "rzilla": {
       "command": "/abs/path/to/ralphzilla/.venv/bin/python",
-      "args": ["/abs/path/to/ralphzilla/ralph_mcp.py", "--project-dir", "/abs/path/to/your/project"],
+      "args": ["/abs/path/to/ralphzilla/ralph_mcp.py", "--repo-dir", "/abs/path/to/your/project"],
       "cwd": "/abs/path/to/ralphzilla"
     }
   }
 }
 ```
 
-The `--project-dir` argument tells the MCP server which project's `prd.json` to read. Without it, the server defaults to ralphzilla's own `prd.json`.
+The `--repo-dir` argument tells the MCP server which project's `prd.json` to read (matching the `rzilla run --repo-dir` CLI flag). Without it, the server defaults to ralphzilla's own `prd.json`. Keep `cwd` set to the ralphzilla checkout so `uv run rzilla` resolves correctly.
 
 ---
 

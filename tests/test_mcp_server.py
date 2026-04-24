@@ -8,6 +8,7 @@ the 8 MCP tools work correctly without touching real infrastructure.
 import json
 import signal
 import subprocess
+import sys
 from unittest.mock import MagicMock, Mock, patch
 
 # Import the module under test
@@ -604,24 +605,29 @@ class TestMCPLoggingConfig:
         assert result.stderr == "", f"Unexpected stderr output: {result.stderr[:200]}"
 
 
-class TestProjectDirArg:
-    """Tests for --project-dir CLI argument."""
+class TestRepoDirArg:
+    """Tests for --repo-dir CLI argument."""
 
     def test_default_project_dir_is_repo_dir(self):
-        """Without --project-dir, PROJECT_DIR equals REPO_DIR."""
+        """Without --repo-dir, PROJECT_DIR equals REPO_DIR."""
         assert mcp_module.PROJECT_DIR == mcp_module.REPO_DIR
 
-    def test_prd_file_uses_project_dir(self, tmp_path):
-        """PRD_FILE, PROGRESS_FILE, LOG_FILE resolve under PROJECT_DIR."""
-        with (
-            patch.object(mcp_module, "PROJECT_DIR", tmp_path),
-            patch.object(mcp_module, "PRD_FILE", tmp_path / "prd.json"),
-            patch.object(mcp_module, "PROGRESS_FILE", tmp_path / "progress.txt"),
-            patch.object(mcp_module, "LOG_FILE", tmp_path / "ralph-loop.log"),
-        ):
+    def test_prd_file_derived_from_project_dir(self, tmp_path):
+        """PRD_FILE, PROGRESS_FILE, LOG_FILE derive from PROJECT_DIR."""
+        import importlib
+
+        original_argv = sys.argv[:]
+        try:
+            sys.argv = [original_argv[0], "--repo-dir", str(tmp_path)]
+            importlib.reload(mcp_module)
+
+            assert mcp_module.PROJECT_DIR == tmp_path
             assert mcp_module.PRD_FILE == tmp_path / "prd.json"
             assert mcp_module.PROGRESS_FILE == tmp_path / "progress.txt"
             assert mcp_module.LOG_FILE == tmp_path / "ralph-loop.log"
+        finally:
+            sys.argv = original_argv
+            importlib.reload(mcp_module)
 
     def test_read_prd_from_project_dir(self, tmp_path):
         """_read_prd reads from PROJECT_DIR, not REPO_DIR."""
@@ -642,8 +648,8 @@ class TestProjectDirArg:
             result = mcp_module._find_latest_summary()
         assert result == summary
 
-    def test_project_dir_cli_arg(self, tmp_path):
-        """Server accepts --project-dir and resolves paths accordingly."""
+    def test_repo_dir_cli_arg(self, tmp_path):
+        """Server accepts --repo-dir and resolves paths accordingly."""
         import subprocess
         import sys
 
@@ -668,7 +674,7 @@ class TestProjectDirArg:
             [
                 sys.executable,
                 str(mcp_module.REPO_DIR / "ralph_mcp.py"),
-                "--project-dir",
+                "--repo-dir",
                 str(tmp_path),
             ],
             input=init_msg,
@@ -678,3 +684,36 @@ class TestProjectDirArg:
         )
         assert result.stderr == "", f"Unexpected stderr: {result.stderr[:200]}"
         assert "rzilla" in result.stdout
+
+    def test_repo_dir_missing_value_exits(self):
+        """--repo-dir without a value prints error and exits."""
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, str(mcp_module.REPO_DIR / "ralph_mcp.py"), "--repo-dir"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        assert result.returncode != 0
+        assert "--repo-dir" in result.stderr
+
+    def test_repo_dir_invalid_path_exits(self):
+        """--repo-dir with non-existent path prints error and exits."""
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(mcp_module.REPO_DIR / "ralph_mcp.py"),
+                "--repo-dir",
+                "/nonexistent/path/xyz",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        assert result.returncode != 0
+        assert "not a directory" in result.stderr

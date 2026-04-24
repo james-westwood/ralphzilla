@@ -18,7 +18,7 @@ Usage:
     # For MCP client config (.mcp.json / opencode.json), use absolute venv path:
     # /path/to/ralphzilla/.venv/bin/python /path/to/ralphzilla/ralph_mcp.py
     # To target a different project's prd.json:
-    #   ralph_mcp.py --project-dir /path/to/project
+    #   ralph_mcp.py --repo-dir /path/to/project
 """
 
 from __future__ import annotations
@@ -38,17 +38,25 @@ from mcp.server.fastmcp import FastMCP
 
 REPO_DIR = Path(__file__).parent
 
-_project_dir_arg = REPO_DIR
+_repo_dir_arg = REPO_DIR
 for i, arg in enumerate(sys.argv[1:], 1):
-    if arg == "--project-dir" and i < len(sys.argv) - 1:
-        _project_dir_arg = Path(sys.argv[i + 1]).resolve()
+    if arg == "--repo-dir":
+        if i >= len(sys.argv) - 1:
+            print("Error: --repo-dir requires a path argument", file=sys.stderr)
+            sys.exit(1)
+        _repo_dir_arg = Path(sys.argv[i + 1]).expanduser().resolve()
+        if not _repo_dir_arg.is_dir():
+            print(f"Error: --repo-dir {_repo_dir_arg} is not a directory", file=sys.stderr)
+            sys.exit(1)
         sys.argv[i : i + 2] = []
         break
 
-PROJECT_DIR = _project_dir_arg
+PROJECT_DIR = _repo_dir_arg
 PRD_FILE = PROJECT_DIR / "prd.json"
 PROGRESS_FILE = PROJECT_DIR / "progress.txt"
 LOG_FILE = PROJECT_DIR / "ralph-loop.log"
+
+_repo_dir_flag = ["--repo-dir", str(PROJECT_DIR)] if PROJECT_DIR != REPO_DIR else []
 
 mcp = FastMCP("rzilla")
 
@@ -253,7 +261,7 @@ def rzilla_dry_run(task: str | None = None) -> str:
     Returns:
         stdout+stderr from the dry-run command
     """
-    cmd = ["uv", "run", "rzilla", "run", "--dry-run"]
+    cmd = ["uv", "run", "rzilla", "run", "--dry-run"] + _repo_dir_flag
     if task:
         cmd.extend(["--task", task])
 
@@ -262,7 +270,7 @@ def rzilla_dry_run(task: str | None = None) -> str:
             cmd,
             capture_output=True,
             text=True,
-            cwd=str(PROJECT_DIR),
+            cwd=str(REPO_DIR),
             timeout=30,
         )
         output = result.stdout
@@ -299,7 +307,7 @@ def rzilla_run(
     Returns:
         JSON string with pid, message, and log_file path
     """
-    cmd = ["uv", "run", "rzilla", "run"]
+    cmd = ["uv", "run", "rzilla", "run"] + _repo_dir_flag
 
     if task:
         cmd.extend(["--task", task])
@@ -322,7 +330,7 @@ def rzilla_run(
                 cmd,
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
-                cwd=str(PROJECT_DIR),
+                cwd=str(REPO_DIR),
                 start_new_session=True,
             )
 
@@ -362,14 +370,14 @@ def rzilla_add(spec: str) -> str:
     Returns:
         Output from the rzilla add command
     """
-    cmd = ["uv", "run", "rzilla", "add", spec]
+    cmd = ["uv", "run", "rzilla", "add", spec] + _repo_dir_flag
 
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            cwd=str(PROJECT_DIR),
+            cwd=str(REPO_DIR),
             timeout=60,
         )
         output = result.stdout
