@@ -113,7 +113,7 @@ Add to `~/.config/opencode/opencode.json` (global) or your project's local confi
   "mcp": {
     "rzilla": {
       "type": "local",
-      "command": ["/abs/path/to/ralphzilla/.venv/bin/python", "/abs/path/to/ralphzilla/ralph_mcp.py"],
+      "command": ["/abs/path/to/ralphzilla/.venv/bin/python", "/abs/path/to/ralphzilla/ralph_mcp.py", "--project-dir", "/abs/path/to/your/project"],
       "enabled": true
     }
   }
@@ -131,12 +131,14 @@ Create a `.mcp.json` in your project root:
   "mcpServers": {
     "rzilla": {
       "command": "/abs/path/to/ralphzilla/.venv/bin/python",
-      "args": ["/abs/path/to/ralphzilla/ralph_mcp.py"],
+      "args": ["/abs/path/to/ralphzilla/ralph_mcp.py", "--project-dir", "/abs/path/to/your/project"],
       "cwd": "/abs/path/to/ralphzilla"
     }
   }
 }
 ```
+
+The `--project-dir` argument tells the MCP server which project's `prd.json` to read. Without it, the server defaults to ralphzilla's own `prd.json`.
 
 ---
 

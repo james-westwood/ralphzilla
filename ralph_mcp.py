@@ -17,6 +17,8 @@ Usage:
     uv run --extra mcp python ralph_mcp.py
     # For MCP client config (.mcp.json / opencode.json), use absolute venv path:
     # /path/to/ralphzilla/.venv/bin/python /path/to/ralphzilla/ralph_mcp.py
+    # To target a different project's prd.json:
+    #   ralph_mcp.py --project-dir /path/to/project
 """
 
 from __future__ import annotations
@@ -26,17 +28,27 @@ import logging
 import os
 import signal
 import subprocess
+import sys
 from pathlib import Path
 
-os.environ["MCP_LOG_LEVEL"] = "ERROR"
+os.environ.setdefault("MCP_LOG_LEVEL", "ERROR")
 
 import psutil
 from mcp.server.fastmcp import FastMCP
 
 REPO_DIR = Path(__file__).parent
-PRD_FILE = REPO_DIR / "prd.json"
-PROGRESS_FILE = REPO_DIR / "progress.txt"
-LOG_FILE = REPO_DIR / "ralph-loop.log"
+
+_project_dir_arg = REPO_DIR
+for i, arg in enumerate(sys.argv[1:], 1):
+    if arg == "--project-dir" and i < len(sys.argv) - 1:
+        _project_dir_arg = Path(sys.argv[i + 1]).resolve()
+        sys.argv[i : i + 2] = []
+        break
+
+PROJECT_DIR = _project_dir_arg
+PRD_FILE = PROJECT_DIR / "prd.json"
+PROGRESS_FILE = PROJECT_DIR / "progress.txt"
+LOG_FILE = PROJECT_DIR / "ralph-loop.log"
 
 mcp = FastMCP("rzilla")
 
@@ -62,6 +74,7 @@ _configure_mcp_logging()
 
 # --- Helper Functions ---
 
+
 def _read_prd() -> dict:
     """Read and parse prd.json from disk."""
     if not PRD_FILE.exists():
@@ -72,7 +85,7 @@ def _read_prd() -> dict:
 
 def _find_latest_summary() -> Path | None:
     """Find the most recent ralph-summary-*.md file."""
-    summaries = sorted(REPO_DIR.glob("ralph-summary-*.md"))
+    summaries = sorted(PROJECT_DIR.glob("ralph-summary-*.md"))
     return summaries[-1] if summaries else None
 
 
@@ -101,6 +114,7 @@ def _get_rzilla_pid() -> int | None:
 
 
 # --- MCP Tools ---
+
 
 @mcp.tool(annotations={"readOnlyHint": True})
 def rzilla_status() -> str:
@@ -248,7 +262,7 @@ def rzilla_dry_run(task: str | None = None) -> str:
             cmd,
             capture_output=True,
             text=True,
-            cwd=str(REPO_DIR),
+            cwd=str(PROJECT_DIR),
             timeout=30,
         )
         output = result.stdout
@@ -308,7 +322,7 @@ def rzilla_run(
                 cmd,
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
-                cwd=str(REPO_DIR),
+                cwd=str(PROJECT_DIR),
                 start_new_session=True,
             )
 
@@ -355,7 +369,7 @@ def rzilla_add(spec: str) -> str:
             cmd,
             capture_output=True,
             text=True,
-            cwd=str(REPO_DIR),
+            cwd=str(PROJECT_DIR),
             timeout=60,
         )
         output = result.stdout
