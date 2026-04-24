@@ -24,7 +24,6 @@ import os
 import signal
 import subprocess
 from pathlib import Path
-from typing import Any
 
 import psutil
 from mcp.server.fastmcp import FastMCP
