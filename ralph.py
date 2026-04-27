@@ -3807,8 +3807,13 @@ class AIRunner:
                 )
             else:  # opencode
                 result = self.runner.run(
-                    ["opencode", "run", "-m", self.config.opencode_reviewer_model,
-                     effective_prompt],
+                    [
+                        "opencode",
+                        "run",
+                        "-m",
+                        self.config.opencode_reviewer_model,
+                        effective_prompt,
+                    ],
                     timeout=300,
                     check=True,
                 )
