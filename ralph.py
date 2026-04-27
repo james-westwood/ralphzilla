@@ -1610,6 +1610,7 @@ class SubprocessRunner:
             stdin=subprocess.DEVNULL,
         )
 
+
 class TaskTracker:
     """
     Sole owner of prd.json and progress.txt.
@@ -2169,12 +2170,8 @@ class BranchManager:
         """Checks out main, fetches, and resets --hard to origin/main."""
         dirty = self.runner.run(["git", "status", "--porcelain"], cwd=self.repo_dir)
         if dirty.stdout.strip():
-            self.logger.warn(
-                "[BranchManager] Uncommitted changes before main reset — stashing"
-            )
-            self.runner.run(
-                ["git", "stash", "push", "-m", "ralph-auto-stash"], cwd=self.repo_dir
-            )
+            self.logger.warn("[BranchManager] Uncommitted changes before main reset — stashing")
+            self.runner.run(["git", "stash", "push", "-m", "ralph-auto-stash"], cwd=self.repo_dir)
         self.runner.run(["git", "checkout", MAIN_BRANCH], cwd=self.repo_dir, check=True)
         self.runner.run(["git", "fetch", "origin", MAIN_BRANCH], cwd=self.repo_dir, check=True)
         self.runner.run(
@@ -3163,7 +3160,7 @@ handles all of that after your PR is merged.
 
 IMPORTANT: When finished, commit ALL your changes before exiting:
   git add -A
-  git commit -m "feat: {task.get('id')} <short description>"
+  git commit -m "feat: {task.get("id")} <short description>"
 Do NOT leave changes uncommitted — the orchestrator cannot create a PR without commits.
 """
         if resume:
@@ -4345,12 +4342,12 @@ class Orchestrator:
         for proc in psutil.process_iter(["pid", "cmdline"]):
             try:
                 cmdline = proc.info["cmdline"] or []
-                if "opencode" in cmdline and "run" in cmdline and any(
-                    repo_str in arg for arg in cmdline
+                if (
+                    "opencode" in cmdline
+                    and "run" in cmdline
+                    and any(repo_str in arg for arg in cmdline)
                 ):
-                    self.logger.warn(
-                        f"[Preflight] Killing stale opencode process PID {proc.pid}"
-                    )
+                    self.logger.warn(f"[Preflight] Killing stale opencode process PID {proc.pid}")
                     proc.kill()
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
@@ -4500,34 +4497,40 @@ class Orchestrator:
             cwd=self.config.repo_dir,
         )
         if rev_result.stdout.strip() == "0":
-            dirty = self.runner.run(
-                ["git", "status", "--porcelain"], cwd=self.config.repo_dir
-            )
+            dirty = self.runner.run(["git", "status", "--porcelain"], cwd=self.config.repo_dir)
             if dirty.stdout.strip():
                 self.logger.warn(
                     "[_run_task_standard] No commits — auto-committing opencode output"
                 )
+                self.runner.run(["git", "add", "-A"], cwd=self.config.repo_dir, check=True)
                 self.runner.run(
-                    ["git", "add", "-A"], cwd=self.config.repo_dir, check=True
-                )
-                self.runner.run(
-                    ["git", "commit", "--no-verify", "-m",
-                     f"feat: {task['id']} {task.get('title', '')} [auto-commit]"],
-                    cwd=self.config.repo_dir, check=True,
+                    [
+                        "git",
+                        "commit",
+                        "--no-verify",
+                        "-m",
+                        f"feat: {task['id']} {task.get('title', '')} [auto-commit]",
+                    ],
+                    cwd=self.config.repo_dir,
+                    check=True,
                 )
             else:
                 self.logger.error(
                     "[_run_task_standard] Step 6: coder produced no commits and no changes"
                 )
-                self._task_results.append(TaskExecutionResult(
-                    task_id=task["id"], title=task.get("title", "Untitled"),
-                    pr_number=None, ci_passed=False, ci_rounds_used=0,
-                    escalated=True, fatal_error_type="CoderFailedError",
-                    fatal_error_reason="Coder produced no commits and no changes",
-                ))
-                return TaskResult(
-                    fatal=True, message="Coder produced no commits and no changes"
+                self._task_results.append(
+                    TaskExecutionResult(
+                        task_id=task["id"],
+                        title=task.get("title", "Untitled"),
+                        pr_number=None,
+                        ci_passed=False,
+                        ci_rounds_used=0,
+                        escalated=True,
+                        fatal_error_type="CoderFailedError",
+                        fatal_error_reason="Coder produced no commits and no changes",
+                    )
                 )
+                return TaskResult(fatal=True, message="Coder produced no commits and no changes")
         try:
             self.branch_manager.push_branch(branch)
         except subprocess.CalledProcessError as e:
