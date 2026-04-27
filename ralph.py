@@ -20,6 +20,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -1527,14 +1528,65 @@ class SubprocessRunner:
 
     def __init__(self, logger: RalphLogger):
         self.logger = logger
+        self._active_pids: set[int] = set()
+
+    def kill_active(self) -> None:
+        """Kill all tracked active subprocesses by process group."""
+        for pid in list(self._active_pids):
+            try:
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+                self.logger.warn(f"[SubprocessRunner] Killed process group for PID {pid}")
+            except (ProcessLookupError, OSError):
+                pass
+        self._active_pids.clear()
+
+    def _run_in_new_session(
+        self,
+        cmd: list[str],
+        env: dict,
+        timeout: int,
+        cwd: "Path | None",
+        check: bool,
+    ) -> subprocess.CompletedProcess:
+        """Spawn in a new process group; kill the whole group on timeout."""
+        proc = subprocess.Popen(
+            cmd,
+            env=env,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            start_new_session=True,
+        )
+        self._active_pids.add(proc.pid)
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                self.logger.warn(
+                    f"[SubprocessRunner] Process group for PID {proc.pid} killed after timeout"
+                )
+            except (ProcessLookupError, OSError):
+                pass
+            proc.wait()
+            self._active_pids.discard(proc.pid)
+            raise
+        self._active_pids.discard(proc.pid)
+        completed = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+        if check and proc.returncode != 0:
+            raise subprocess.CalledProcessError(proc.returncode, cmd, stdout, stderr)
+        return completed
 
     def run(
         self,
         cmd: list[str],
         env_removals: list[str] | None = None,
         timeout: int = SUBPROCESS_TIMEOUT_SECS,
-        cwd: Path | None = None,
+        cwd: "Path | None" = None,
         check: bool = False,
+        start_new_session: bool = False,
     ) -> subprocess.CompletedProcess:
         env_removals = env_removals or []
         self.logger.info(f"Running command: {' '.join(cmd)}")
@@ -1542,6 +1594,9 @@ class SubprocessRunner:
         child_env = os.environ.copy()
         for key in env_removals:
             child_env.pop(key, None)
+
+        if start_new_session:
+            return self._run_in_new_session(cmd, child_env, timeout, cwd, check)
 
         return subprocess.run(
             cmd,
@@ -1553,7 +1608,6 @@ class SubprocessRunner:
             text=True,
             stdin=subprocess.DEVNULL,
         )
-
 
 class TaskTracker:
     """
@@ -3462,6 +3516,7 @@ class AIRunner:
                     ],
                     cwd=cwd,
                     check=True,
+                    start_new_session=True,
                 )
             return True
         except subprocess.CalledProcessError:
@@ -4097,6 +4152,14 @@ class Orchestrator:
         self._task_results: list[TaskExecutionResult] = []
         self._iterations_consumed: int = 0
 
+        signal.signal(signal.SIGTERM, self._handle_sigterm)
+
+    def _handle_sigterm(self, signum: int, frame: object) -> None:
+        """Kill all active child subprocesses before exiting on SIGTERM."""
+        self.logger.warn("[Orchestrator] SIGTERM received — killing active child processes")
+        self.runner.kill_active()
+        sys.exit(1)
+
     def _check_cli(self, cmd: str) -> bool:
         """Check if a CLI command is available."""
         try:
@@ -4143,7 +4206,26 @@ class Orchestrator:
         except PlanInvalidError as e:
             raise PreflightError(f"Plan validation failed: {e}") from e
 
+        self._kill_stale_opencode_processes()
         self.logger.info("Preflight passed.")
+
+    def _kill_stale_opencode_processes(self) -> None:
+        """Kill stale opencode run processes targeting this repo before each iteration."""
+        import psutil
+
+        repo_str = str(self.config.repo_dir)
+        for proc in psutil.process_iter(["pid", "cmdline"]):
+            try:
+                cmdline = proc.info["cmdline"] or []
+                if "opencode" in cmdline and "run" in cmdline and any(
+                    repo_str in arg for arg in cmdline
+                ):
+                    self.logger.warn(
+                        f"[Preflight] Killing stale opencode process PID {proc.pid}"
+                    )
+                    proc.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
 
     def _check_stop_conditions(self, task: dict | None) -> str | None:
         """Check if sprint should stop. Returns reason or None."""
@@ -4559,6 +4641,7 @@ class Orchestrator:
 
     def _finalize_run(self) -> None:
         """Handle clean-exit verification and run history recording."""
+        self.runner.kill_active()
         self.logger.info("Sprint complete")
         self.logger.info("Loop finished.")
         self.scrum_master._post_sprint_cleanup()
