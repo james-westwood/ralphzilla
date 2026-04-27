@@ -59,6 +59,8 @@ DEFAULT_OPENCODE_REVIEWER_MODEL = "opencode/kimi-k2.5"
 DEFAULT_OPENCODE_TEST_WRITER_MODEL = "opencode/minimax-m2.7"
 GEMINI_MODEL = "gemini-2.5-pro"
 ESCALATIONS_FILE = ".ralph/escalations.json"
+MAX_PROMPT_ARG_BYTES = 100_000  # ~100KB — safe CLI arg limit; beyond this write to file
+RALPH_PROMPT_FILE = ".ralph_prompt.md"
 MAX_RETRIES_PER_BLOCKER = 3
 MAX_TOTAL_BLOCKERS_PER_SPRINT = 5
 
@@ -3711,6 +3713,26 @@ class AIRunner:
         result = re.sub(r"\n{3,}", "\n\n", result)
         return result.strip()
 
+    def _deliver_prompt(self, prompt: str, cwd: Path) -> tuple[str, "Path | None"]:
+        """If prompt exceeds safe CLI arg size, write to a file and return a redirect.
+
+        Returns (effective_prompt, prompt_file_path_or_None).
+        Caller must delete the file after the subprocess completes.
+        """
+        if len(prompt.encode()) <= MAX_PROMPT_ARG_BYTES:
+            return prompt, None
+        prompt_file = cwd / RALPH_PROMPT_FILE
+        prompt_file.write_text(prompt, encoding="utf-8")
+        self.logger.warn(
+            f"[AIRunner] Prompt too large for CLI arg ({len(prompt.encode())} bytes) "
+            f"— written to {RALPH_PROMPT_FILE}"
+        )
+        redirect = (
+            f"Your full task instructions are in the file {RALPH_PROMPT_FILE} "
+            "in the current directory. Read that file first, then complete the task."
+        )
+        return redirect, prompt_file
+
     def run_coder(
         self,
         agent: str,
@@ -3721,17 +3743,18 @@ class AIRunner:
     ) -> bool:
         """Invokes the agent subprocess, returns True on success."""
         self.logger.info(f"Invoking coder: {agent}")
+        effective_prompt, prompt_file = self._deliver_prompt(prompt, cwd)
         try:
             if agent == "claude":
                 self.runner.run(
-                    ["claude", "--dangerously-skip-permissions", "--print", prompt],
+                    ["claude", "--dangerously-skip-permissions", "--print", effective_prompt],
                     env_removals=["CLAUDECODE"],
                     cwd=cwd,
                     check=True,
                 )
             elif agent == "gemini":
                 self.runner.run(
-                    ["gemini", "-m", GEMINI_MODEL, "--yolo", "-p", prompt],
+                    ["gemini", "-m", GEMINI_MODEL, "--yolo", "-p", effective_prompt],
                     cwd=cwd,
                     check=True,
                 )
@@ -3744,7 +3767,7 @@ class AIRunner:
                         "-m",
                         model,
                         "--dangerously-skip-permissions",
-                        prompt,
+                        effective_prompt,
                     ],
                     cwd=cwd,
                     check=True,
@@ -3754,6 +3777,9 @@ class AIRunner:
         except subprocess.CalledProcessError:
             self.logger.error(f"Coder {agent} failed.")
             return False
+        finally:
+            if prompt_file and prompt_file.exists():
+                prompt_file.unlink()
 
     def run_reviewer(self, agent: str, prompt: str) -> str:
         """Returns reviewer output; handles nested-Claude fallback."""
@@ -3765,21 +3791,24 @@ class AIRunner:
             return self.run_reviewer("gemini", prompt)
 
         self.logger.info(f"Invoking reviewer: {agent}")
+        _cwd = Path(".")
+        effective_prompt, prompt_file = self._deliver_prompt(prompt, _cwd)
         try:
             if agent == "claude":
                 result = self.runner.run(
-                    ["claude", "--print", prompt],
+                    ["claude", "--print", effective_prompt],
                     env_removals=["CLAUDECODE"],
                     check=True,
                 )
             elif agent == "gemini":
                 result = self.runner.run(
-                    ["gemini", "-m", GEMINI_MODEL, "-p", prompt],
+                    ["gemini", "-m", GEMINI_MODEL, "-p", effective_prompt],
                     check=True,
                 )
             else:  # opencode
                 result = self.runner.run(
-                    ["opencode", "run", "-m", self.config.opencode_reviewer_model, prompt],
+                    ["opencode", "run", "-m", self.config.opencode_reviewer_model,
+                     effective_prompt],
                     timeout=300,
                     check=True,
                 )
@@ -3787,6 +3816,9 @@ class AIRunner:
         except subprocess.CalledProcessError:
             self.logger.error(f"Reviewer {agent} failed.")
             return ""
+        finally:
+            if prompt_file and prompt_file.exists():
+                prompt_file.unlink()
 
     def run_test_writer(self, prompt: str, cwd: Path, agent: str | None = None) -> bool:
         """Test writer always uses a different model from coder."""
@@ -5144,7 +5176,7 @@ def cli():
     "repo_dir",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     default=None,
-    help="Repo root (default: directory containing ralph.py)",
+    help="Repo root (default: git repo root nearest to cwd)",
 )
 @click.option(
     "--max-workers",
@@ -5184,7 +5216,7 @@ def run(
 ) -> int:
     """Run the AI sprint loop."""
     if repo_dir is None:
-        repo_dir = Path(__file__).parent.resolve()
+        repo_dir = _find_repo_root()
 
     log_file = repo_dir / LOG_FILE_NAME
 
@@ -5263,14 +5295,14 @@ def run(
     "repo_dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help="Repo root (default: directory containing ralph.py)",
+    help="Repo root (default: git repo root nearest to cwd)",
 )
 def init(
     repo_dir: Path | None,
 ) -> int:
     """Initialize a new ralph project."""
     if repo_dir is None:
-        repo_dir = Path(__file__).parent.resolve()
+        repo_dir = _find_repo_root()
 
     wizard = DiscoveryWizard(sys.stdin, sys.stdout)
     spec = wizard.run()
@@ -5376,6 +5408,24 @@ exit 0
     return 0
 
 
+def _find_repo_root() -> Path:
+    """Walk upward from cwd to find the git repo root.
+
+    Searches for a .git directory starting at cwd and walking up.
+    Falls back to cwd if no git root is found.
+    """
+    start = Path.cwd()
+    candidate = start
+    while True:
+        if (candidate / ".git").exists():
+            return candidate.resolve()
+        parent = candidate.parent
+        if parent == candidate:
+            break
+        candidate = parent
+    return start.resolve()
+
+
 def _extract_milestone_spec(file_path: Path, milestone: str | None) -> str:
     """Extract spec text from a roadmap file.
 
@@ -5424,7 +5474,7 @@ def _extract_milestone_spec(file_path: Path, milestone: str | None) -> str:
     "repo_dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help="Repo root (default: directory containing ralph.py)",
+    help="Repo root (default: git repo root nearest to cwd)",
 )
 def add(
     spec: str,
@@ -5445,7 +5495,7 @@ def add(
       rzilla add "Build a login page with OAuth"
     """
     if repo_dir is None:
-        repo_dir = Path(__file__).parent.resolve()
+        repo_dir = _find_repo_root()
 
     # If SPEC is an existing file path, extract the milestone spec from it
     spec_path = Path(spec)
@@ -5505,7 +5555,7 @@ def add(
     "repo_dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help="Repo root (default: directory containing ralph.py)",
+    help="Repo root (default: git repo root nearest to cwd)",
 )
 @click.option(
     "--max-iterations",
@@ -5519,7 +5569,7 @@ def plan(brief: str | None, repo_dir: Path | None, max_iterations: int) -> int:
     BRIEF: Optional brief text (or reads from stdin if --brief is omitted).
     """
     if repo_dir is None:
-        repo_dir = Path(__file__).parent.resolve()
+        repo_dir = _find_repo_root()
 
     if brief is None:
         brief = sys.stdin.read().strip()
