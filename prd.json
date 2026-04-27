@@ -1409,6 +1409,104 @@
       ],
       "epic": "M6",
       "complexity": 2
+    },
+    {
+      "id": "M6-11",
+      "epic": "M6",
+      "title": "subprocess_stdin_devnull",
+      "owner": "ralph",
+      "complexity": 1,
+      "description": "Fix the root cause of opencode processes hanging indefinitely: pass stdin=subprocess.DEVNULL when spawning opencode subprocesses. Without this, opencode run waits for terminal input when called non-interactively, causing the process to hang forever rather than timing out. This is a one-line fix in SubprocessRunner or the AIRunner invocation site. All opencode subprocess calls must pipe stdin from /dev/null so the process can detect EOF and proceed headlessly.",
+      "acceptance_criteria": [
+        "ralph.py: opencode subprocess calls pass stdin=subprocess.DEVNULL",
+        "tests/test_subprocess_runner.py: SubprocessRunner passes DEVNULL as stdin by default for opencode calls",
+        "tests/test_subprocess_runner.py: A command that reads stdin completes immediately rather than hanging when DEVNULL is set",
+        "No regressions in existing SubprocessRunner tests"
+      ],
+      "files": [
+        "ralph.py",
+        "tests/test_subprocess_runner.py"
+      ],
+      "depends_on": [
+        "M6-01"
+      ],
+      "completed": false,
+      "priority": 0
+    },
+    {
+      "id": "M6-12",
+      "epic": "M6",
+      "title": "process_group_isolation",
+      "owner": "ralph",
+      "complexity": 2,
+      "description": "Spawn opencode subprocesses in their own process group using start_new_session=True so that on timeout or sprint abort, the entire process tree (rzilla, opencode, and any children opencode spawns) can be killed atomically with os.killpg(). Currently, killing the rzilla process orphans the opencode child. With process group isolation, os.killpg(os.getpgid(proc.pid), signal.SIGKILL) terminates all descendants in one call, making cleanup bulletproof. Apply this to all opencode subprocess invocations in the AIRunner layer.",
+      "acceptance_criteria": [
+        "ralph.py: opencode subprocesses spawned with start_new_session=True",
+        "ralph.py: On timeout, os.killpg() is called to kill the process group before raising the timeout exception",
+        "ralph.py: On SIGTERM to rzilla, spawned process groups are killed before exit",
+        "tests/test_process_group.py: Spawned process and its children are all terminated when the group is killed",
+        "tests/test_process_group.py: No orphan processes remain after a simulated timeout",
+        "No regressions in existing subprocess or AI runner tests"
+      ],
+      "files": [
+        "ralph.py",
+        "tests/test_process_group.py"
+      ],
+      "depends_on": [
+        "M6-11"
+      ],
+      "completed": false,
+      "priority": 0
+    },
+    {
+      "id": "M6-13",
+      "epic": "M6",
+      "title": "child_pid_tracking",
+      "owner": "ralph",
+      "complexity": 1,
+      "description": "Track PIDs of all opencode child processes spawned during a sprint in a runtime registry (a simple list on the Orchestrator or AIRunner). On sprint abort (SIGTERM handler) and on normal sprint completion, iterate the registry and kill any still-running child PIDs with SIGKILL. This provides a safety net complementary to process group isolation: even if a process escapes its group, the PID registry catches it. Log each kill at WARN level with the PID and task ID for auditability.",
+      "acceptance_criteria": [
+        "ralph.py: Orchestrator or AIRunner maintains a list of spawned child PIDs",
+        "ralph.py: SIGTERM handler kills all tracked child PIDs before exiting",
+        "ralph.py: Sprint completion routine kills any remaining tracked PIDs",
+        "ralph.py: Each kill logs WARN with PID and associated task ID",
+        "tests/test_child_pid_tracking.py: Spawned PIDs are recorded in the registry",
+        "tests/test_child_pid_tracking.py: Simulated abort kills all tracked PIDs"
+      ],
+      "files": [
+        "ralph.py",
+        "tests/test_child_pid_tracking.py"
+      ],
+      "depends_on": [
+        "M6-12"
+      ],
+      "completed": false,
+      "priority": 0
+    },
+    {
+      "id": "M6-14",
+      "epic": "M6",
+      "title": "preflight_stale_process_detection",
+      "owner": "ralph",
+      "complexity": 1,
+      "description": "Add a preflight check that detects and kills any stale opencode processes targeting the current project directory before starting a new sprint iteration. Use psutil or /proc to scan for processes matching 'opencode run' with the project path in their command line. If found, log them at WARN and send SIGKILL. This prevents two competing opencode processes from silently working on the same branch simultaneously, which causes git conflicts and corrupted state. Run this check at the start of each iteration, not just sprint start.",
+      "acceptance_criteria": [
+        "ralph.py: Preflight scans for stale 'opencode run' processes matching the project path",
+        "ralph.py: Stale processes are killed with SIGKILL and logged at WARN with their PID",
+        "ralph.py: Preflight check runs at the start of each sprint iteration",
+        "ralph.py: If no stale processes found, preflight passes silently",
+        "tests/test_preflight_stale.py: Stale process mock is detected and killed",
+        "tests/test_preflight_stale.py: Clean environment passes preflight without error"
+      ],
+      "files": [
+        "ralph.py",
+        "tests/test_preflight_stale.py"
+      ],
+      "depends_on": [
+        "M6-13"
+      ],
+      "completed": false,
+      "priority": 0
     }
   ]
 }
