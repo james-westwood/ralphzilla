@@ -3432,10 +3432,13 @@ class RuntimeUnavailableError(Exception):
 class TaskRunResult:
     """Result of running a task with an AI runtime."""
 
-    success: bool
-    task_id: str
-    branch_name: str
-    output: str
+    success: bool = False
+    task_id: str = ""
+    branch_name: str = ""
+    output: str = ""
+    agent: str = ""
+    error: str = ""
+    files_changed: list[str] = field(default_factory=list)
 
 
 class RuntimeConfig:
@@ -3457,6 +3460,9 @@ class RuntimeConfig:
         primary: str,
         fallback: list[str] | None = None,
         timeout: int = 600,
+        repo: str = "ralphzilla",
+        repo_path: Path | None = None,
+        aider_model: str | None = None,
     ):
         if primary not in self.SUPPORTED_RUNTIMES:
             raise ValueError(f"Unsupported runtime: {primary}")
@@ -3469,6 +3475,9 @@ class RuntimeConfig:
         self.primary = primary
         self.fallback = fallback or []
         self.timeout = timeout
+        self.repo = repo
+        self.repo_path = repo_path or Path.cwd()
+        self.aider_model = aider_model
 
 
 class AIRunnerBase(ABC):
@@ -3533,7 +3542,105 @@ class AIRunnerBase(ABC):
                 version = version.lstrip("v")
                 return version.split()[0] if version else None
 
+        if runtime == "aider":
+            try:
+                result = self.runner.run(["aider", "--version"], capture_output=True)
+            except Exception:
+                return None
+            returncode = getattr(result, "returncode", None)
+            if returncode == 0:
+                version = result.stdout.strip() if result.stdout else ""
+                parts = version.split()
+                return parts[1] if len(parts) > 1 else parts[0]
+
         return None
+
+
+class AiderRunner(AIRunnerBase):
+    """Aider implementation of AIRunnerBase."""
+
+    def get_available_runtimes(self) -> set[str]:
+        try:
+            result = self.runner.run(["aider", "--version"], capture_output=True)
+            if result.returncode == 0:
+                return {"aider"}
+        except Exception:
+            pass
+        return set()
+
+    def run_task(self, task_id: str, branch_name: str) -> TaskRunResult:
+        if not self.is_available():
+            raise RuntimeUnavailableError("aider runtime not available")
+
+        task_tracker = TaskTracker(self.config.repo_path or Path.cwd())
+        task = task_tracker.get_task_by_id(task_id)
+        if not task:
+            return TaskRunResult(
+                success=False,
+                task_id=task_id,
+                branch_name=branch_name,
+                error=f"Task {task_id} not found",
+                agent="aider",
+            )
+
+        task_url = f"https://github.com/james-westwood/{self.config.repo}/tree/{branch_name}"
+        description = task.get("description", "")
+        files = task.get("files", [])
+        message = (
+            f"Implement task: {task_id}\n{description}\nBranch: {branch_name}\nSee: {task_url}"
+        )
+
+        cmd = [
+            "aider",
+            "--no-auto-commits",
+            "--no-git",
+            "--yes",
+            "--message",
+            message,
+        ]
+
+        if self.config.aider_model:
+            cmd.extend(["--model", self.config.aider_model])
+
+        for f in files:
+            cmd.extend(["--file", str(f)])
+
+        try:
+            result = self.runner.run(
+                cmd,
+                cwd=self.config.repo_path,
+                timeout=self.config.timeout,
+                start_new_session=True,
+            )
+            output = result.stdout if result else ""
+            return TaskRunResult(
+                success=True,
+                task_id=task_id,
+                branch_name=branch_name,
+                output=output,
+                agent="aider",
+                files_changed=files,
+            )
+        except subprocess.TimeoutExpired:
+            return TaskRunResult(
+                success=False,
+                task_id=task_id,
+                branch_name=branch_name,
+                output="TIMEOUT",
+                agent="aider",
+                error="Timeout expired",
+            )
+        except Exception as e:
+            return TaskRunResult(
+                success=False,
+                task_id=task_id,
+                branch_name=branch_name,
+                error=str(e),
+                agent="aider",
+            )
+
+    def is_available(self) -> bool:
+        return "aider" in self.get_available_runtimes()
 
 
 class AIRunner:
