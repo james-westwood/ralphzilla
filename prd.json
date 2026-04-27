@@ -1430,7 +1430,7 @@
       "depends_on": [
         "M6-01"
       ],
-      "completed": false,
+      "completed": true,
       "priority": 0
     },
     {
@@ -1455,7 +1455,7 @@
       "depends_on": [
         "M6-11"
       ],
-      "completed": false,
+      "completed": true,
       "priority": 0
     },
     {
@@ -1480,7 +1480,7 @@
       "depends_on": [
         "M6-12"
       ],
-      "completed": false,
+      "completed": true,
       "priority": 0
     },
     {
@@ -1505,7 +1505,7 @@
       "depends_on": [
         "M6-13"
       ],
-      "completed": false,
+      "completed": true,
       "priority": 0
     }
   ]
