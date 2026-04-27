@@ -104,41 +104,29 @@ Ralphzilla ships an MCP server (`ralph_mcp.py`) that exposes 8 tools for monitor
 | `rzilla_add` | No | Add a task to the backlog |
 | `rzilla_abort` | No | Abort running sprint |
 
-### Setup for opencode
+### Setup
 
-Add to `~/.config/opencode/opencode.json` (global) or your project's local config:
+**One rzilla MCP instance per project.** Each project that uses rzilla must have its own `.mcp.json` in its repo root. Do **not** add rzilla to the global opencode config (`~/.config/opencode/opencode.json`) — a global instance can only point at one project's `prd.json`, which causes confusion when you work across multiple repos.
 
-```json
-{
-  "mcp": {
-    "rzilla": {
-      "type": "local",
-      "command": ["/abs/path/to/ralphzilla/.venv/bin/python", "/abs/path/to/ralphzilla/ralph_mcp.py", "--repo-dir", "/abs/path/to/your/project"],
-      "enabled": true
-    }
-  }
-}
-```
-
-> **Important**: Use the absolute path to the venv Python binary, **not** `uv run --extra mcp`. The `uv run` command resolves extras from the current project's `pyproject.toml`, so it fails when opencode starts from a different directory. Keep `cwd` pointed at the ralphzilla checkout — `--repo-dir` tells rzilla which repo to operate on, but subprocesses still run from the ralphzilla environment.
-
-### Setup for other MCP clients
-
-Create a `.mcp.json` in your project root:
+Create `.mcp.json` in your project root:
 
 ```json
 {
   "mcpServers": {
     "rzilla": {
       "command": "/abs/path/to/ralphzilla/.venv/bin/python",
-      "args": ["/abs/path/to/ralphzilla/ralph_mcp.py", "--repo-dir", "/abs/path/to/your/project"],
-      "cwd": "/abs/path/to/ralphzilla"
+      "args": ["/abs/path/to/ralphzilla/ralph_mcp.py"],
+      "cwd": "/abs/path/to/your/project"
     }
   }
 }
 ```
 
-The `--repo-dir` argument tells the MCP server which project's `prd.json` to read (matching the `rzilla run --repo-dir` CLI flag). Without it, the server defaults to ralphzilla's own `prd.json`. Keep `cwd` set to the ralphzilla checkout so `uv run rzilla` resolves correctly.
+**Key points:**
+- Set `cwd` to the project you want rzilla to operate on — the server auto-detects the git root and reads `prd.json` from there.
+- Use the absolute path to ralphzilla's venv Python binary, **not** `uv run --extra mcp` (which fails when launched from a different project directory).
+- Only use `--repo-dir` in the args if you need to override the cwd-based project detection.
+- When you switch projects in your editor, the correct rzilla instance is loaded automatically from that project's `.mcp.json`.
 
 ---
 
