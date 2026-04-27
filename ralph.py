@@ -2167,6 +2167,14 @@ class BranchManager:
 
     def ensure_main_up_to_date(self) -> None:
         """Checks out main, fetches, and resets --hard to origin/main."""
+        dirty = self.runner.run(["git", "status", "--porcelain"], cwd=self.repo_dir)
+        if dirty.stdout.strip():
+            self.logger.warn(
+                "[BranchManager] Uncommitted changes before main reset — stashing"
+            )
+            self.runner.run(
+                ["git", "stash", "push", "-m", "ralph-auto-stash"], cwd=self.repo_dir
+            )
         self.runner.run(["git", "checkout", MAIN_BRANCH], cwd=self.repo_dir, check=True)
         self.runner.run(["git", "fetch", "origin", MAIN_BRANCH], cwd=self.repo_dir, check=True)
         self.runner.run(
@@ -3152,6 +3160,11 @@ Files to modify: {files_text}
 
 IMPORTANT: Do NOT touch prd.json or progress.txt — the orchestrator
 handles all of that after your PR is merged.
+
+IMPORTANT: When finished, commit ALL your changes before exiting:
+  git add -A
+  git commit -m "feat: {task.get('id')} <short description>"
+Do NOT leave changes uncommitted — the orchestrator cannot create a PR without commits.
 """
         if resume:
             prompt += """
@@ -4482,6 +4495,39 @@ class Orchestrator:
 
         # Step 6: push_branch
         self.logger.info("[_run_task_standard] Step 6: push_branch")
+        rev_result = self.runner.run(
+            ["git", "rev-list", "--count", f"{MAIN_BRANCH}..HEAD"],
+            cwd=self.config.repo_dir,
+        )
+        if rev_result.stdout.strip() == "0":
+            dirty = self.runner.run(
+                ["git", "status", "--porcelain"], cwd=self.config.repo_dir
+            )
+            if dirty.stdout.strip():
+                self.logger.warn(
+                    "[_run_task_standard] No commits — auto-committing opencode output"
+                )
+                self.runner.run(
+                    ["git", "add", "-A"], cwd=self.config.repo_dir, check=True
+                )
+                self.runner.run(
+                    ["git", "commit", "--no-verify", "-m",
+                     f"feat: {task['id']} {task.get('title', '')} [auto-commit]"],
+                    cwd=self.config.repo_dir, check=True,
+                )
+            else:
+                self.logger.error(
+                    "[_run_task_standard] Step 6: coder produced no commits and no changes"
+                )
+                self._task_results.append(TaskExecutionResult(
+                    task_id=task["id"], title=task.get("title", "Untitled"),
+                    pr_number=None, ci_passed=False, ci_rounds_used=0,
+                    escalated=True, fatal_error_type="CoderFailedError",
+                    fatal_error_reason="Coder produced no commits and no changes",
+                ))
+                return TaskResult(
+                    fatal=True, message="Coder produced no commits and no changes"
+                )
         try:
             self.branch_manager.push_branch(branch)
         except subprocess.CalledProcessError as e:
@@ -4504,23 +4550,33 @@ class Orchestrator:
         # Step 6.5: Create PR if no existing PR
         if pr_info is None:
             self.logger.info("[_run_task_standard] Step 6.5: create PR")
-            try:
-                pr_info = self.pr_manager.create(branch, task["title"], PromptBuilder.pr_body(task))
-            except subprocess.CalledProcessError as e:
-                self.logger.error(f"[_run_task_standard] Step 6.5 failed: {e}")
-                self._task_results.append(
-                    TaskExecutionResult(
-                        task_id=task["id"],
-                        title=task.get("title", "Untitled"),
-                        pr_number=None,
-                        ci_passed=False,
-                        ci_rounds_used=0,
-                        escalated=True,
-                        fatal_error_type="PRCreationFailed",
-                        fatal_error_reason=str(e),
-                    )
+            existing_pr = self.pr_manager.get_existing(branch)
+            if existing_pr:
+                self.logger.warn(
+                    f"[_run_task_standard] Step 6.5: PR #{existing_pr.number} already open"
+                    " — reusing"
                 )
-                return TaskResult(fatal=True, message=f"PR creation failed: {e}")
+                pr_info = existing_pr
+            else:
+                try:
+                    pr_info = self.pr_manager.create(
+                        branch, task["title"], PromptBuilder.pr_body(task)
+                    )
+                except subprocess.CalledProcessError as e:
+                    self.logger.error(f"[_run_task_standard] Step 6.5 failed: {e}")
+                    self._task_results.append(
+                        TaskExecutionResult(
+                            task_id=task["id"],
+                            title=task.get("title", "Untitled"),
+                            pr_number=None,
+                            ci_passed=False,
+                            ci_rounds_used=0,
+                            escalated=True,
+                            fatal_error_type="PRCreationFailed",
+                            fatal_error_reason=str(e),
+                        )
+                    )
+                    return TaskResult(fatal=True, message=f"PR creation failed: {e}")
             self.logger.info("[_run_task_standard] Step 6.5 complete")
 
         # Step 7: ReviewLoop.run() (only if not skip_review)
