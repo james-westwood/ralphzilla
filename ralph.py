@@ -24,6 +24,7 @@ import signal
 import subprocess
 import sys
 import time
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -3409,6 +3410,120 @@ Task sizing rules — IMPORTANT:
 
 Output ONLY valid JSON — no explanation, no markdown formatting. Start with [ and end with ].
 """
+
+
+class RuntimeUnavailableError(Exception):
+    """Raised when a requested runtime is not available."""
+
+    pass
+
+
+@dataclass
+class TaskRunResult:
+    """Result of running a task with an AI runtime."""
+
+    success: bool
+    task_id: str
+    branch_name: str
+    output: str
+
+
+class RuntimeConfig:
+    """Configuration for AI runtime selection."""
+
+    SUPPORTED_RUNTIMES = {
+        "aider",
+        "claude",
+        "claude-code",
+        "cursor",
+        "cline",
+        "codex",
+        "gemini",
+        "opencode",
+    }
+
+    def __init__(
+        self,
+        primary: str,
+        fallback: list[str] | None = None,
+        timeout: int = 600,
+    ):
+        if primary not in self.SUPPORTED_RUNTIMES:
+            raise ValueError(f"Unsupported runtime: {primary}")
+
+        if fallback:
+            for r in fallback:
+                if r not in self.SUPPORTED_RUNTIMES:
+                    raise ValueError(f"Unsupported fallback runtime: {r}")
+
+        self.primary = primary
+        self.fallback = fallback or []
+        self.timeout = timeout
+
+
+class AIRunnerBase(ABC):
+    """Abstract base class for AI runtime implementations."""
+
+    def __init__(
+        self,
+        runner: SubprocessRunner,
+        logger: RalphLogger,
+        config: RuntimeConfig,
+    ):
+        self.runner = runner
+        self.logger = logger
+        self.config = config
+
+    @abstractmethod
+    def run_task(self, task_id: str, branch_name: str) -> TaskRunResult:
+        """Execute a task using an AI runtime."""
+        pass
+
+    @abstractmethod
+    def get_available_runtimes(self) -> set[str]:
+        """Return set of available runtime names."""
+        pass
+
+    def get_effective_runtime(self) -> str:
+        """Return the effective runtime to use, falling back if needed."""
+        available = self.get_available_runtimes()
+        primary = self.config.primary
+
+        if primary in available:
+            return primary
+
+        for fallback in self.config.fallback:
+            if fallback in available:
+                return fallback
+
+        raise RuntimeUnavailableError(
+            f"No runtime available. Primary={primary}, fallback={self.config.fallback}"
+        )
+
+    def check_version(self, runtime: str) -> str | None:
+        """Check if a runtime is available and return its version."""
+        if runtime not in self.get_available_runtimes():
+            return None
+
+        if runtime == "opencode":
+            try:
+                result = self.runner.run(
+                    ["opencode", "--version"],
+                    capture_output=True,
+                )
+            except Exception:
+                return None
+            returncode = getattr(result, "returncode", None)
+            if returncode and returncode == 0:
+                version = result.stdout.strip()
+                version = version.lstrip("v")
+                return version.split()[0] if version else None
+            elif not returncode:
+                version = result.stdout.strip()
+                version = version.lstrip("v")
+                return version.split()[0] if version else None
+
+        return None
 
 
 class AIRunner:
