@@ -1507,6 +1507,24 @@
       ],
       "completed": true,
       "priority": 0
+    },
+    {
+      "id": "M7-01",
+      "title": "ci_gate_enforcement_research",
+      "description": "Research and design the CI gate enforcement system for ralphzilla. This system will ensure that only passing builds can merge to main. Research should cover: (1) GitHub branch protection rules and required status checks, (2) integration with existing pytest and ruff quality checks, (3) whether to use GitHub Actions or external CI, (4) how to handle the pre-commit hook issue mentioned in CLAUDE.md where --no-verify is currently used. The output should be a design document recommending the approach, including specific configuration files needed, workflow files, and any code changes to ralph.py or ralph-loop.sh to support CI integration. Do NOT implement the solution in this task \u2014 only research and produce the design.",
+      "acceptance_criteria": [
+        "docs/ci_gate_design.md exists with complete research findings",
+        "docs/ci_gate_design.md includes comparison of GitHub Actions vs alternatives",
+        "docs/ci_gate_design.md includes specific .github/workflows/ file recommendations",
+        "docs/ci_gate_design.md addresses the --no-verify pre-commit workaround",
+        "docs/ci_gate_design.md lists any required changes to ralph.py and ralph-loop.sh",
+        "docs/ci_gate_design.md includes a clear recommendation with rationale"
+      ],
+      "owner": "ralph",
+      "completed": false,
+      "depends_on": [],
+      "epic": "M7",
+      "complexity": 2
     }
   ]
 }
