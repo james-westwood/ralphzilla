@@ -114,3 +114,31 @@ class TestCLIFlags:
 
         for field in expected_fields:
             assert field in ralph.Config.__dataclass_fields__, f"Config missing field: {field}"
+
+
+class TestFindRepoRoot:
+    """Tests for _find_repo_root defaulting logic."""
+
+    def test_finds_git_root_from_cwd(self, monkeypatch, tmp_path):
+        """Should find .git dir by walking up from cwd."""
+        git_dir = tmp_path / "project"
+        git_dir.mkdir()
+        (git_dir / ".git").mkdir()
+        sub = git_dir / "src" / "pkg"
+        sub.mkdir(parents=True)
+        monkeypatch.chdir(sub)
+        assert ralph._find_repo_root() == git_dir.resolve()
+
+    def test_falls_back_to_cwd_when_no_git(self, monkeypatch, tmp_path):
+        """Should fall back to cwd when no .git found anywhere above."""
+        no_git = tmp_path / "nogit"
+        no_git.mkdir()
+        monkeypatch.chdir(no_git)
+        assert ralph._find_repo_root() == no_git.resolve()
+
+    def test_finds_repo_root_from_repo_root(self, monkeypatch):
+        """Should find .git when cwd IS the repo root."""
+        monkeypatch.chdir(Path(__file__).parent.parent)
+        result = ralph._find_repo_root()
+        assert (result / ".git").exists()
+        assert result == Path(__file__).parent.parent.resolve()
