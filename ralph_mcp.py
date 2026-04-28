@@ -13,12 +13,19 @@ Exposes 8 MCP tools for monitoring and controlling the ralphzilla sprint loop:
 - rzilla_abort: Abort running sprint
 
 Usage:
-    # From ralphzilla repo only:
+    # Run from the ralphzilla checkout (so uv can find ralphzilla's pyproject.toml):
     uv run --extra mcp python ralph_mcp.py
     # For MCP client config (.mcp.json / opencode.json), use absolute venv path:
     # /path/to/ralphzilla/.venv/bin/python /path/to/ralphzilla/ralph_mcp.py
-    # To target a different project's prd.json:
+    # To target a specific project's prd.json:
     #   ralph_mcp.py --repo-dir /path/to/project
+
+By default, the server resolves the project directory by walking up from cwd
+to find the nearest .git directory. This means each project's .mcp.json does
+not need to specify --repo-dir — just set cwd to the project root.
+Note: the uv subprocess (rzilla CLI) is always invoked from the ralphzilla
+checkout directory so that uv resolves its scripts correctly; --repo-dir is
+passed on every command to target the project's prd.json.
 """
 
 from __future__ import annotations
@@ -36,7 +43,27 @@ os.environ.setdefault("MCP_LOG_LEVEL", "ERROR")
 import psutil
 from mcp.server.fastmcp import FastMCP
 
-REPO_DIR = Path(__file__).parent
+RALPH_DIR = Path(__file__).parent
+
+
+def _find_repo_root(start: Path | None = None) -> Path:
+    """Walk upward from start to find the git repo root.
+
+    Searches for a .git directory starting at start and walking up.
+    Falls back to start if no git root is found.
+    """
+    candidate = (start or Path.cwd()).resolve()
+    while True:
+        if (candidate / ".git").exists():
+            return candidate
+        parent = candidate.parent
+        if parent == candidate:
+            break
+        candidate = parent
+    return (start or Path.cwd()).resolve()
+
+
+REPO_DIR = _find_repo_root()
 
 
 def _set_project_dir(project_dir: Path) -> None:
@@ -46,11 +73,11 @@ def _set_project_dir(project_dir: Path) -> None:
     PRD_FILE = PROJECT_DIR / "prd.json"
     PROGRESS_FILE = PROJECT_DIR / "progress.txt"
     LOG_FILE = PROJECT_DIR / "ralph-loop.log"
-    _repo_dir_flag = ["--repo-dir", str(PROJECT_DIR)] if PROJECT_DIR != REPO_DIR else []
+    _repo_dir_flag = ["--repo-dir", str(PROJECT_DIR)]
 
 
 def _parse_repo_dir_args(argv: list[str]) -> tuple[Path, list[str]]:
-    project_dir = REPO_DIR
+    project_dir = _find_repo_root()
     cleaned_argv = [argv[0]]
     i = 1
 
@@ -290,7 +317,7 @@ def rzilla_dry_run(task: str | None = None) -> str:
             cmd,
             capture_output=True,
             text=True,
-            cwd=str(REPO_DIR),
+            cwd=str(RALPH_DIR),
             timeout=30,
         )
         output = result.stdout
@@ -358,7 +385,7 @@ def rzilla_run(
                 cmd,
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
-                cwd=str(REPO_DIR),
+                cwd=str(RALPH_DIR),
                 start_new_session=True,
             )
 
@@ -405,7 +432,7 @@ def rzilla_add(spec: str) -> str:
             cmd,
             capture_output=True,
             text=True,
-            cwd=str(REPO_DIR),
+            cwd=str(RALPH_DIR),
             timeout=60,
         )
         output = result.stdout

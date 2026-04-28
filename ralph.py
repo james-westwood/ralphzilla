@@ -59,6 +59,8 @@ DEFAULT_OPENCODE_REVIEWER_MODEL = "opencode/kimi-k2.5"
 DEFAULT_OPENCODE_TEST_WRITER_MODEL = "opencode/minimax-m2.7"
 GEMINI_MODEL = "gemini-2.5-pro"
 ESCALATIONS_FILE = ".ralph/escalations.json"
+MAX_PROMPT_ARG_BYTES = 100_000  # ~100KB — safe CLI arg limit; beyond this write to file
+RALPH_PROMPT_FILE = ".ralph_prompt.md"
 MAX_RETRIES_PER_BLOCKER = 3
 MAX_TOTAL_BLOCKERS_PER_SPRINT = 5
 
@@ -3432,10 +3434,13 @@ class RuntimeUnavailableError(Exception):
 class TaskRunResult:
     """Result of running a task with an AI runtime."""
 
-    success: bool
-    task_id: str
-    branch_name: str
-    output: str
+    success: bool = False
+    task_id: str = ""
+    branch_name: str = ""
+    output: str = ""
+    agent: str = ""
+    error: str = ""
+    files_changed: list[str] = field(default_factory=list)
 
 
 class RuntimeConfig:
@@ -3457,6 +3462,9 @@ class RuntimeConfig:
         primary: str,
         fallback: list[str] | None = None,
         timeout: int = 600,
+        repo: str = "ralphzilla",
+        repo_path: Path | None = None,
+        aider_model: str | None = None,
     ):
         if primary not in self.SUPPORTED_RUNTIMES:
             raise ValueError(f"Unsupported runtime: {primary}")
@@ -3469,6 +3477,9 @@ class RuntimeConfig:
         self.primary = primary
         self.fallback = fallback or []
         self.timeout = timeout
+        self.repo = repo
+        self.repo_path = repo_path or Path.cwd()
+        self.aider_model = aider_model
 
 
 class AIRunnerBase(ABC):
@@ -3533,7 +3544,152 @@ class AIRunnerBase(ABC):
                 version = version.lstrip("v")
                 return version.split()[0] if version else None
 
+        if runtime == "aider":
+            try:
+                result = self.runner.run(["aider", "--version"], capture_output=True)
+            except Exception:
+                return None
+            returncode = getattr(result, "returncode", None)
+            if returncode == 0:
+                version = result.stdout.strip() if result.stdout else ""
+                parts = version.split()
+                return parts[1] if len(parts) > 1 else parts[0]
+
         return None
+
+
+class AiderRunner(AIRunnerBase):
+    """Aider implementation of AIRunnerBase."""
+
+    def get_available_runtimes(self) -> set[str]:
+        try:
+            result = self.runner.run(["aider", "--version"], capture_output=True)
+            if result.returncode == 0:
+                return {"aider"}
+        except Exception:
+            pass
+        return set()
+
+    def run_task(self, task_id: str, branch_name: str) -> TaskRunResult:
+        if not self.is_available():
+            raise RuntimeUnavailableError("aider runtime not available")
+
+        task_tracker = TaskTracker(self.config.repo_path or Path.cwd())
+        task = task_tracker.get_task_by_id(task_id)
+        if not task:
+            return TaskRunResult(
+                success=False,
+                task_id=task_id,
+                branch_name=branch_name,
+                error=f"Task {task_id} not found",
+                agent="aider",
+            )
+
+        task_url = self._build_task_url(branch_name)
+        description = task.get("description", "")
+        files = task.get("files", [])
+        message = (
+            f"Implement task: {task_id}\n{description}\nBranch: {branch_name}\nSee: {task_url}"
+        )
+
+        cmd = [
+            "aider",
+            "--no-auto-commits",
+            "--no-git",
+            "--yes",
+            "--message",
+            message,
+        ]
+
+        if self.config.aider_model:
+            cmd.extend(["--model", self.config.aider_model])
+
+        for f in files:
+            cmd.extend(["--file", str(f)])
+
+        files_before = self._get_changed_files()
+        try:
+            result = self.runner.run(
+                cmd,
+                cwd=self.config.repo_path,
+                timeout=self.config.timeout,
+                start_new_session=True,
+            )
+            output = result.stdout if result else ""
+            stderr = (result.stderr if result else "") or ""
+            if result and result.returncode != 0:
+                output = (output + "\n" + stderr).strip() if stderr else output
+                return TaskRunResult(
+                    success=False,
+                    task_id=task_id,
+                    branch_name=branch_name,
+                    output=output,
+                    error=f"aider exited with code {result.returncode}",
+                    agent="aider",
+                )
+            files_after = self._get_changed_files()
+            files_changed = list(files_after - files_before)
+            return TaskRunResult(
+                success=True,
+                task_id=task_id,
+                branch_name=branch_name,
+                output=output,
+                agent="aider",
+                files_changed=files_changed,
+            )
+        except subprocess.TimeoutExpired:
+            return TaskRunResult(
+                success=False,
+                task_id=task_id,
+                branch_name=branch_name,
+                output="TIMEOUT",
+                agent="aider",
+                error="Timeout expired",
+            )
+        except Exception as e:
+            return TaskRunResult(
+                success=False,
+                task_id=task_id,
+                branch_name=branch_name,
+                error=str(e),
+                agent="aider",
+            )
+
+    def _build_task_url(self, branch_name: str) -> str:
+        """Derive the task URL from git remote origin."""
+        try:
+            result = self.runner.run(
+                ["git", "remote", "get-url", "origin"],
+                cwd=self.config.repo_path,
+                capture_output=True,
+            )
+            if result and result.returncode == 0:
+                url = result.stdout.strip()
+                if url.startswith("git@"):
+                    url = url.replace("git@", "https://", 1).replace(":", "/", 1)
+                if url.endswith(".git"):
+                    url = url[:-4]
+                return f"{url}/tree/{branch_name}"
+        except Exception:
+            pass
+        return f"https://github.com/james-westwood/{self.config.repo}/tree/{branch_name}"
+
+    def _get_changed_files(self) -> set[str]:
+        """Return set of files modified relative to HEAD via git diff."""
+        try:
+            result = self.runner.run(
+                ["git", "diff", "--name-only", "HEAD"],
+                cwd=self.config.repo_path,
+                capture_output=True,
+            )
+            if result and result.returncode == 0 and result.stdout:
+                return {f for f in result.stdout.strip().splitlines() if f.strip()}
+        except Exception:
+            pass
+        return set()
+
+    def is_available(self) -> bool:
+        return "aider" in self.get_available_runtimes()
 
 
 class AIRunner:
@@ -3604,6 +3760,26 @@ class AIRunner:
         result = re.sub(r"\n{3,}", "\n\n", result)
         return result.strip()
 
+    def _deliver_prompt(self, prompt: str, cwd: Path) -> tuple[str, "Path | None"]:
+        """If prompt exceeds safe CLI arg size, write to a file and return a redirect.
+
+        Returns (effective_prompt, prompt_file_path_or_None).
+        Caller must delete the file after the subprocess completes.
+        """
+        if len(prompt.encode()) <= MAX_PROMPT_ARG_BYTES:
+            return prompt, None
+        prompt_file = cwd / RALPH_PROMPT_FILE
+        prompt_file.write_text(prompt, encoding="utf-8")
+        self.logger.warn(
+            f"[AIRunner] Prompt too large for CLI arg ({len(prompt.encode())} bytes) "
+            f"— written to {RALPH_PROMPT_FILE}"
+        )
+        redirect = (
+            f"Your full task instructions are in the file {RALPH_PROMPT_FILE} "
+            "in the current directory. Read that file first, then complete the task."
+        )
+        return redirect, prompt_file
+
     def run_coder(
         self,
         agent: str,
@@ -3614,17 +3790,18 @@ class AIRunner:
     ) -> bool:
         """Invokes the agent subprocess, returns True on success."""
         self.logger.info(f"Invoking coder: {agent}")
+        effective_prompt, prompt_file = self._deliver_prompt(prompt, cwd)
         try:
             if agent == "claude":
                 self.runner.run(
-                    ["claude", "--dangerously-skip-permissions", "--print", prompt],
+                    ["claude", "--dangerously-skip-permissions", "--print", effective_prompt],
                     env_removals=["CLAUDECODE"],
                     cwd=cwd,
                     check=True,
                 )
             elif agent == "gemini":
                 self.runner.run(
-                    ["gemini", "-m", GEMINI_MODEL, "--yolo", "-p", prompt],
+                    ["gemini", "-m", GEMINI_MODEL, "--yolo", "-p", effective_prompt],
                     cwd=cwd,
                     check=True,
                 )
@@ -3637,7 +3814,7 @@ class AIRunner:
                         "-m",
                         model,
                         "--dangerously-skip-permissions",
-                        prompt,
+                        effective_prompt,
                     ],
                     cwd=cwd,
                     check=True,
@@ -3647,6 +3824,9 @@ class AIRunner:
         except subprocess.CalledProcessError:
             self.logger.error(f"Coder {agent} failed.")
             return False
+        finally:
+            if prompt_file and prompt_file.exists():
+                prompt_file.unlink()
 
     def run_reviewer(self, agent: str, prompt: str) -> str:
         """Returns reviewer output; handles nested-Claude fallback."""
@@ -3658,21 +3838,29 @@ class AIRunner:
             return self.run_reviewer("gemini", prompt)
 
         self.logger.info(f"Invoking reviewer: {agent}")
+        _cwd = Path(".")
+        effective_prompt, prompt_file = self._deliver_prompt(prompt, _cwd)
         try:
             if agent == "claude":
                 result = self.runner.run(
-                    ["claude", "--print", prompt],
+                    ["claude", "--print", effective_prompt],
                     env_removals=["CLAUDECODE"],
                     check=True,
                 )
             elif agent == "gemini":
                 result = self.runner.run(
-                    ["gemini", "-m", GEMINI_MODEL, "-p", prompt],
+                    ["gemini", "-m", GEMINI_MODEL, "-p", effective_prompt],
                     check=True,
                 )
             else:  # opencode
                 result = self.runner.run(
-                    ["opencode", "run", "-m", self.config.opencode_reviewer_model, prompt],
+                    [
+                        "opencode",
+                        "run",
+                        "-m",
+                        self.config.opencode_reviewer_model,
+                        effective_prompt,
+                    ],
                     timeout=300,
                     check=True,
                 )
@@ -3680,6 +3868,9 @@ class AIRunner:
         except subprocess.CalledProcessError:
             self.logger.error(f"Reviewer {agent} failed.")
             return ""
+        finally:
+            if prompt_file and prompt_file.exists():
+                prompt_file.unlink()
 
     def run_test_writer(self, prompt: str, cwd: Path, agent: str | None = None) -> bool:
         """Test writer always uses a different model from coder."""
@@ -5037,7 +5228,7 @@ def cli():
     "repo_dir",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     default=None,
-    help="Repo root (default: directory containing ralph.py)",
+    help="Repo root (default: git repo root nearest to cwd)",
 )
 @click.option(
     "--max-workers",
@@ -5077,7 +5268,7 @@ def run(
 ) -> int:
     """Run the AI sprint loop."""
     if repo_dir is None:
-        repo_dir = Path(__file__).parent.resolve()
+        repo_dir = _find_repo_root()
 
     log_file = repo_dir / LOG_FILE_NAME
 
@@ -5156,14 +5347,14 @@ def run(
     "repo_dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help="Repo root (default: directory containing ralph.py)",
+    help="Repo root (default: git repo root nearest to cwd)",
 )
 def init(
     repo_dir: Path | None,
 ) -> int:
     """Initialize a new ralph project."""
     if repo_dir is None:
-        repo_dir = Path(__file__).parent.resolve()
+        repo_dir = _find_repo_root()
 
     wizard = DiscoveryWizard(sys.stdin, sys.stdout)
     spec = wizard.run()
@@ -5269,6 +5460,24 @@ exit 0
     return 0
 
 
+def _find_repo_root() -> Path:
+    """Walk upward from cwd to find the git repo root.
+
+    Searches for a .git directory starting at cwd and walking up.
+    Falls back to cwd if no git root is found.
+    """
+    start = Path.cwd()
+    candidate = start
+    while True:
+        if (candidate / ".git").exists():
+            return candidate.resolve()
+        parent = candidate.parent
+        if parent == candidate:
+            break
+        candidate = parent
+    return start.resolve()
+
+
 def _extract_milestone_spec(file_path: Path, milestone: str | None) -> str:
     """Extract spec text from a roadmap file.
 
@@ -5317,7 +5526,7 @@ def _extract_milestone_spec(file_path: Path, milestone: str | None) -> str:
     "repo_dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help="Repo root (default: directory containing ralph.py)",
+    help="Repo root (default: git repo root nearest to cwd)",
 )
 def add(
     spec: str,
@@ -5338,7 +5547,7 @@ def add(
       rzilla add "Build a login page with OAuth"
     """
     if repo_dir is None:
-        repo_dir = Path(__file__).parent.resolve()
+        repo_dir = _find_repo_root()
 
     # If SPEC is an existing file path, extract the milestone spec from it
     spec_path = Path(spec)
@@ -5398,7 +5607,7 @@ def add(
     "repo_dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help="Repo root (default: directory containing ralph.py)",
+    help="Repo root (default: git repo root nearest to cwd)",
 )
 @click.option(
     "--max-iterations",
@@ -5412,7 +5621,7 @@ def plan(brief: str | None, repo_dir: Path | None, max_iterations: int) -> int:
     BRIEF: Optional brief text (or reads from stdin if --brief is omitted).
     """
     if repo_dir is None:
-        repo_dir = Path(__file__).parent.resolve()
+        repo_dir = _find_repo_root()
 
     if brief is None:
         brief = sys.stdin.read().strip()
