@@ -13,7 +13,7 @@ Exposes 8 MCP tools for monitoring and controlling the ralphzilla sprint loop:
 - rzilla_abort: Abort running sprint
 
 Usage:
-    # Run from the ralphzilla checkout (so uv can find ralphzilla's pyproject.toml):
+    # From any repo (auto-detects git root from cwd):
     uv run --extra mcp python ralph_mcp.py
     # For MCP client config (.mcp.json / opencode.json), use absolute venv path:
     # /path/to/ralphzilla/.venv/bin/python /path/to/ralphzilla/ralph_mcp.py
@@ -23,9 +23,6 @@ Usage:
 By default, the server resolves the project directory by walking up from cwd
 to find the nearest .git directory. This means each project's .mcp.json does
 not need to specify --repo-dir — just set cwd to the project root.
-Note: the uv subprocess (rzilla CLI) is always invoked from the ralphzilla
-checkout directory so that uv resolves its scripts correctly; --repo-dir is
-passed on every command to target the project's prd.json.
 """
 
 from __future__ import annotations
@@ -308,7 +305,7 @@ def rzilla_dry_run(task: str | None = None) -> str:
     Returns:
         stdout+stderr from the dry-run command
     """
-    cmd = ["uv", "run", "rzilla", "run", "--dry-run"] + _repo_dir_flag
+    cmd = [str(RALPH_DIR / ".venv" / "bin" / "rzilla"), "run", "--dry-run"] + _repo_dir_flag
     if task:
         cmd.extend(["--task", task])
 
@@ -317,7 +314,7 @@ def rzilla_dry_run(task: str | None = None) -> str:
             cmd,
             capture_output=True,
             text=True,
-            cwd=str(RALPH_DIR),
+            cwd=str(PROJECT_DIR),
             timeout=30,
         )
         output = result.stdout
@@ -358,7 +355,7 @@ def rzilla_run(
     Returns:
         JSON string with pid, message, and log_file path
     """
-    cmd = ["uv", "run", "rzilla", "run"] + _repo_dir_flag
+    cmd = [str(RALPH_DIR / ".venv" / "bin" / "rzilla"), "run"] + _repo_dir_flag
 
     if task:
         cmd.extend(["--task", task])
@@ -386,7 +383,7 @@ def rzilla_run(
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
-                cwd=str(RALPH_DIR),
+                cwd=str(PROJECT_DIR),
                 start_new_session=True,
             )
 
@@ -426,14 +423,14 @@ def rzilla_add(spec: str) -> str:
     Returns:
         Output from the rzilla add command
     """
-    cmd = ["uv", "run", "rzilla", "add", spec] + _repo_dir_flag
+    cmd = [str(RALPH_DIR / ".venv" / "bin" / "rzilla"), "add", spec] + _repo_dir_flag
 
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            cwd=str(RALPH_DIR),
+            cwd=str(PROJECT_DIR),
             timeout=60,
         )
         output = result.stdout

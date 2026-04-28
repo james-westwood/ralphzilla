@@ -289,7 +289,7 @@ class TestRzillaDryRun:
 
         mock_subprocess.assert_called_once()
         call_args = mock_subprocess.call_args[0][0]
-        assert call_args[0] == "uv"
+        assert call_args[0].endswith("rzilla")
         assert "--dry-run" in call_args
         assert "--task" not in call_args
         assert result == "Dry run output"
@@ -391,11 +391,9 @@ class TestRzillaAdd:
 
         mock_subprocess.assert_called_once()
         call_args = mock_subprocess.call_args[0][0]
-        assert call_args[0] == "uv"
-        assert call_args[1] == "run"
-        assert call_args[2] == "rzilla"
-        assert call_args[3] == "add"
-        assert call_args[4] == "Implement feature X"
+        assert call_args[0].endswith("rzilla")
+        assert "add" in call_args
+        assert "Implement feature X" in call_args
         assert result == "Added task: TASK-99 - Implement feature X"
 
     def test_handles_timeout(self):
