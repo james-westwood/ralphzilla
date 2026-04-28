@@ -2,7 +2,7 @@
 
 **Status**: Planning
 **Date**: 2026-03-15
-**Context**: Rewriting `ralph-loop.sh` (~700 lines bash) as a structured Python script after hitting several production issues running the loop against `playchitect`.
+**Context**: Rewrite of the original `ralph-loop.sh` (~700 lines bash) as a structured Python script after hitting several production issues running the loop against `playchitect`. The bash scripts have since been deleted — `rzilla run` is the only sprint runner.
 
 ---
 
@@ -544,7 +544,7 @@ PRManager.merge()
 
 ## CLI Interface
 
-Replaces both `ralph-loop.sh` and `ralph-once.sh`:
+Replaces the deleted `ralph-loop.sh` and `ralph-once.sh`:
 
 ```
 rzilla [OPTIONS]          # installed via pipx
@@ -1288,8 +1288,8 @@ Before parallel execution is possible, the prd.json schema needs two new fields:
 
 ## Source Files for Implementation
 
-- `ralph-loop.sh` — current behaviour to replicate (prompts, fallback chains, polling logic)
-- `ralph-once.sh` — single-task variant to merge into `--task` flag
+- ~~`ralph-loop.sh`~~ — deleted; behaviour now in `rzilla run`
+- ~~`ralph-once.sh`~~ — deleted; merged into `--task` flag
 - `prd.json` — definitive task schema
 - `pyproject.toml` — confirms `click` is available, Python 3.13+ target
 - `CLAUDE.md` — branch naming, commit style, no AI attribution in git messages

@@ -14,7 +14,6 @@ AI sprint runner — executes `prd.json` backlogs via AI agents with autonomous 
 | `roadmap.md` | Milestone plan |
 | `prd.json` | Task backlog |
 | `ralph.py` | The entire implementation (single file) |
-| `ralph-loop.sh` | Sprint runner (bash) |
 
 ## Non-negotiable constraints
 

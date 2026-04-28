@@ -31,7 +31,7 @@ If any of these fail, fix them before starting the loop — the loop will abort 
 
 ## Your tools
 
-- `ralph-loop.sh` — the sprint runner (bash, in this repo)
+- `rzilla run` — the sprint runner (Python, via `uv run rzilla run`)
 - `prd.json` — the task backlog (you own this)
 - `gh` CLI — for checking PRs, CI status, and posting comments
 - `DESIGN.md` — full architecture spec; read this before making any decisions about tasks or code
@@ -40,7 +40,7 @@ If any of these fail, fix them before starting the loop — the loop will abort 
 
 ## Workflow skills (Claude Code only)
 
-These Claude Code skills complement the loop. Use them **before** `bash ralph-loop.sh` starts, or between sprints. They do not survive outside a Claude session — they are interaction tools, not automation.
+These Claude Code skills complement the loop. Use them **before** `rzilla run` starts, or between sprints. They do not survive outside a Claude session — they are interaction tools, not automation.
 
 | Skill | When to use |
 |---|---|
@@ -56,17 +56,19 @@ These are complements, not replacements — `ralph-planner` and `ralph-prd` are 
 ## Starting a sprint
 
 ```bash
-# Standard run — kimi coder, gemini reviewer
-bash ralph-loop.sh --opencode-only --max 10
+# Standard run — opencode coder + reviewer
+uv run rzilla run --opencode-only --max 10
 
-# Skip review (use when running inside Claude Code — reviewer is unavailable)
-bash ralph-loop.sh --opencode-only --skip-review --max 10
+# Skip review (use when reviewer models are unavailable)
+uv run rzilla run --opencode-only --skip-review --max 10
 
 # Force a specific task
-bash ralph-loop.sh --opencode-only --skip-review --task M1-01
+uv run rzilla run --opencode-only --skip-review --task M1-01
 
 # Resume interrupted run
-bash ralph-loop.sh --opencode-only --skip-review --resume --max 10
+uv run rzilla run --opencode-only --skip-review --resume --max 10
+
+# Or via the MCP server (rzilla tools)
 ```
 
 **Key rule**: if you are running inside a Claude Code session, use `--opencode-only` — this routes both coder and reviewer through opencode (e.g. Big Pickle codes, Kimi reviews). Do **not** use `--skip-review` just because you're inside Claude Code. The only thing that fails in a nested Claude session is invoking `claude` as a subprocess — opencode models are unaffected (see DESIGN.md lesson #8). Only fall back to `--skip-review` if all opencode reviewer models are simultaneously unavailable — CI is the quality gate of last resort.
@@ -114,8 +116,8 @@ Exit code 0 alone is **not** a reliable success signal — always verify against
 |---|---|---|
 | `prd.json` modified in diff | Coder touched prd.json | Close the PR, re-run same task |
 | `CI failed after N rounds` | Persistent CI failure | Check `gh run view --log-failed`, create a fix task |
-| `reviewer.*no output` / empty review | Nested Claude reviewer failed | Restart with `--skip-review` |
-| Loop dies at `Running reviewer` with no log output | All reviewer backends failed; `set -e` killed script | `gh pr close <N>` then restart with `--skip-review --resume` |
+| `reviewer.*no output` / empty review | Reviewer backends failed | Restart with `--skip-review` |
+| `CoderFailedError` / `CoderException` | Coder crashed or timed out | Check log for partial commits, restart with `--resume` |
 | opencode reviewer times out (exit 124) | opencode API down or model unavailable | Use `--opencode-reviewer-model google/gemini-2.0-flash` or `--skip-review` |
 | `ff-only` / `diverged` | Local main diverged | `git fetch origin main && git reset --hard origin/main` |
 | No clean-exit marker in log | Silent mid-loop crash | Check for half-open PRs, close them, restart with `--resume` |
