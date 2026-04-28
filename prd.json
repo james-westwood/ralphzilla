@@ -1254,7 +1254,7 @@
         "ralph.py: AiderRunner class implemented and registered"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [
         "M6-01"
       ],
