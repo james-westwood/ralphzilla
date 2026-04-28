@@ -3423,6 +3423,32 @@ Task sizing rules — IMPORTANT:
 Output ONLY valid JSON — no explanation, no markdown formatting. Start with [ and end with ].
 """
 
+    @staticmethod
+    def verify_prompt(task: dict, code_context: str) -> str:
+        ac_text = "\n".join(
+            [f"{i + 1}. {ac}" for i, ac in enumerate(task.get("acceptance_criteria", []))]
+        )
+        return (
+            "You are a code verifier. Evaluate whether each "
+            "acceptance criterion is satisfied by the implementation.\n\n"
+            f"Task: {task.get('title')}\n"
+            f"Description: {task.get('description')}\n\n"
+            f"Acceptance Criteria:\n{ac_text}\n\n"
+            f"Implementation code:\n{code_context}\n\n"
+            "For each criterion, output a line in this EXACT format:\n"
+            "N: STATUS: reason\n\n"
+            "Where:\n"
+            "- N is the criterion number (1, 2, 3, ...)\n"
+            "- STATUS is one of: PASSED, FAILED, PARTIAL\n"
+            "- reason is a brief explanation of why the criterion "
+            "passed, failed, or is partial\n\n"
+            "Example:\n"
+            "1: PASSED: The function correctly handles edge cases\n"
+            "2: FAILED: Missing error handling for null inputs\n"
+            "3: PARTIAL: Implemented but only for the happy path\n\n"
+            "You MUST evaluate EVERY criterion. Do not skip any."
+        )
+
 
 class RuntimeUnavailableError(Exception):
     """Raised when a requested runtime is not available."""
@@ -3441,6 +3467,116 @@ class VerifyResult:
 
     def __bool__(self) -> bool:
         return self.passed
+
+
+def _gather_code_context(files: list[str], repo_dir: Path) -> str:
+    if not files:
+        default = repo_dir / "ralph.py"
+        if default.exists():
+            return f"--- ralph.py ---\n{default.read_text(encoding='utf-8', errors='replace')}"
+        return "(no files found)"
+
+    parts: list[str] = []
+    for filepath in files:
+        full_path = repo_dir / filepath
+        if full_path.exists():
+            content = full_path.read_text(encoding="utf-8", errors="replace")
+            parts.append(f"--- {filepath} ---\n{content}")
+        else:
+            parts.append(f"--- {filepath} ---\n(File not found)")
+    return "\n\n".join(parts)
+
+
+def _build_verify_report(verdicts: list[dict]) -> str:
+    symbols = {"PASSED": "\u2713", "FAILED": "\u2717", "PARTIAL": "\u25d0"}
+    lines: list[str] = []
+    passed_count = sum(1 for v in verdicts if v["status"] == "PASSED")
+    failed_count = sum(1 for v in verdicts if v["status"] == "FAILED")
+    partial_count = sum(1 for v in verdicts if v["status"] == "PARTIAL")
+
+    for v in verdicts:
+        sym = symbols.get(v["status"], "?")
+        lines.append(f"  {sym} {v['criterion']} — {v['status']}: {v['reason']}")
+
+    summary = f"Passed: {passed_count}  Failed: {failed_count}  Partial: {partial_count}"
+    return f"{summary}\n" + "\n".join(lines)
+
+
+def _parse_verify_response(response: str, task: dict) -> VerifyResult:
+    criteria = task.get("acceptance_criteria", [])
+    if not response.strip():
+        verdicts = [
+            {
+                "criterion": c,
+                "status": "FAILED",
+                "reason": "No response from AI",
+            }
+            for c in criteria
+        ]
+        report = _build_verify_report(verdicts)
+        return VerifyResult(passed=False, exit_code=1, verdicts=verdicts, report=report)
+
+    verdicts: list[dict] = []
+    pattern = re.compile(
+        r"(\d+)\s*:\s*(PASSED|FAILED|PARTIAL)\s*:\s*(.+)",
+        re.IGNORECASE,
+    )
+    fallback = re.compile(r"(\d+)\s*:\s*(PASSED|FAILED|PARTIAL)\b", re.IGNORECASE)
+
+    for i, criterion in enumerate(criteria):
+        num = str(i + 1)
+        matched = False
+        for m in pattern.finditer(response):
+            if m.group(1) == num:
+                verdicts.append(
+                    {
+                        "criterion": criterion,
+                        "status": m.group(2).upper(),
+                        "reason": m.group(3).strip(),
+                    }
+                )
+                matched = True
+                break
+        if matched:
+            continue
+        for m in fallback.finditer(response):
+            if m.group(1) == num:
+                verdicts.append(
+                    {
+                        "criterion": criterion,
+                        "status": m.group(2).upper(),
+                        "reason": "(no reason provided)",
+                    }
+                )
+                matched = True
+                break
+        if not matched:
+            verdicts.append(
+                {
+                    "criterion": criterion,
+                    "status": "FAILED",
+                    "reason": "Could not parse verdict from AI response",
+                }
+            )
+
+    if not verdicts:
+        verdicts = [
+            {
+                "criterion": c,
+                "status": "FAILED",
+                "reason": "Unparseable AI response",
+            }
+            for c in criteria
+        ]
+
+    report = _build_verify_report(verdicts)
+    all_passed = all(v["status"] == "PASSED" for v in verdicts)
+    return VerifyResult(
+        passed=all_passed,
+        exit_code=0 if all_passed else 1,
+        verdicts=verdicts,
+        report=report,
+    )
 
 
 @dataclass
@@ -3910,6 +4046,22 @@ class AIRunner:
         except (json.JSONDecodeError, AttributeError):
             self.logger.error("Failed to parse decomposition output as JSON.")
             return []
+
+
+def _run_verify(
+    task: dict,
+    task_tracker: TaskTracker,
+    ai_runner: AIRunner,
+    repo_dir: Path,
+    agent: str | None,
+) -> VerifyResult:
+    files = task.get("files", [])
+    code_context = _gather_code_context(files, repo_dir)
+    prompt = PromptBuilder.verify_prompt(task, code_context)
+
+    effective_agent = agent or "gemini"
+    response = ai_runner.run_reviewer(effective_agent, prompt)
+    return _parse_verify_response(response, task)
 
 
 class PreCommitGate:
@@ -5708,6 +5860,66 @@ def plan(brief: str | None, repo_dir: Path | None, max_iterations: int) -> int:
     output_path = repo_dir / PLAN_CONSENSUS_OUTPUT
     print(str(output_path))
     return 0
+
+
+@cli.command("verify")
+@click.argument("task_id")
+@click.option(
+    "--agent",
+    "agent",
+    default=None,
+    help="AI agent to use for verification (default: gemini)",
+)
+@click.option(
+    "--repo-dir",
+    "repo_dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Repo root (default: git repo root nearest to cwd)",
+)
+def verify(task_id: str, agent: str | None, repo_dir: Path | None) -> None:
+    """Verify acceptance criteria for a task against the implemented code.
+
+    TASK_ID: The task ID to verify (e.g. M6-06).
+    """
+    if repo_dir is None:
+        repo_dir = _find_repo_root()
+
+    log_file = repo_dir / LOG_FILE_NAME
+    logger = RalphLogger(log_file)
+    runner = SubprocessRunner(logger)
+
+    config = Config(
+        max_iterations=1,
+        skip_review=False,
+        tdd_mode=False,
+        model_mode="random",
+        opencode_model=DEFAULT_OPENCODE_MODEL,
+        resume=False,
+        repo_dir=repo_dir,
+        log_file=log_file,
+        max_precommit_rounds=DEFAULT_MAX_PRECOMMIT_ROUNDS,
+        max_review_rounds=DEFAULT_MAX_REVIEW_ROUNDS,
+        max_ci_fix_rounds=DEFAULT_MAX_CI_FIX_ROUNDS,
+        max_test_fix_rounds=DEFAULT_MAX_TEST_FIX_ROUNDS,
+        max_test_write_rounds=DEFAULT_MAX_TEST_FIX_ROUNDS,
+        force_task_id=None,
+    )
+
+    task_tracker = TaskTracker(repo_dir / PRD_FILE, repo_dir / PROGRESS_FILE, runner, logger)
+    ai_runner = AIRunner(runner, logger, config)
+
+    task = task_tracker.get_task_by_id(task_id)
+    if task is None:
+        print(
+            f"Error: Task '{task_id}' not found in prd.json",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    result = _run_verify(task, task_tracker, ai_runner, repo_dir, agent)
+    print(result.report)
+    sys.exit(result.exit_code)
 
 
 main = cli  # Backwards compatibility
