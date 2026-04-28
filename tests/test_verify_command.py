@@ -107,9 +107,7 @@ class TestVerifySendsACsAndCodeToAI:
 
     def test_run_verify_calls_ai_runner(self):
         """_run_verify calls the AI runner with the correct agent."""
-        task = FakeTask(
-            id="T1", acceptance_criteria=["AC 1"], files=["ralph.py"]
-        ).to_dict()
+        task = FakeTask(id="T1", acceptance_criteria=["AC 1"], files=["ralph.py"]).to_dict()
         tracker = MagicMock()
         ai_runner = MagicMock()
         ai_runner.run_reviewer.return_value = "1: PASSED: ok"
@@ -230,9 +228,7 @@ class TestVerifyExitCode:
 
     def test_run_verify_exit_code_passed(self):
         """_run_verify returns exit_code 0 when all criteria pass."""
-        task = FakeTask(
-            id="T1", acceptance_criteria=["AC 1"]
-        ).to_dict()
+        task = FakeTask(id="T1", acceptance_criteria=["AC 1"]).to_dict()
         ai_runner = MagicMock()
         ai_runner.run_reviewer.return_value = "1: PASSED: ok"
 
@@ -242,9 +238,7 @@ class TestVerifyExitCode:
 
     def test_run_verify_exit_code_failed(self):
         """_run_verify returns exit_code 1 when any criterion fails."""
-        task = FakeTask(
-            id="T1", acceptance_criteria=["AC 1"]
-        ).to_dict()
+        task = FakeTask(id="T1", acceptance_criteria=["AC 1"]).to_dict()
         ai_runner = MagicMock()
         ai_runner.run_reviewer.return_value = "1: FAILED: broken"
 
@@ -284,9 +278,7 @@ class TestVerifyReportDetails:
 
     def test_report_shows_summary_counts(self):
         """Report includes summary with pass/fail/partial counts."""
-        task = FakeTask(
-            id="T1", acceptance_criteria=["A", "B", "C"]
-        ).to_dict()
+        task = FakeTask(id="T1", acceptance_criteria=["A", "B", "C"]).to_dict()
         response = "1: PASSED: a\n2: FAILED: b\n3: PARTIAL: c"
         result = ralph._parse_verify_response(response, task)
         assert "Passed: 1" in result.report
@@ -295,9 +287,7 @@ class TestVerifyReportDetails:
 
     def test_report_shows_status_symbols(self):
         """Report uses symbols (✓/✗/◐) for visual status."""
-        task = FakeTask(
-            id="T1", acceptance_criteria=["A", "B"]
-        ).to_dict()
+        task = FakeTask(id="T1", acceptance_criteria=["A", "B"]).to_dict()
         response = "1: PASSED: a\n2: FAILED: b"
         result = ralph._parse_verify_response(response, task)
         assert "✓" in result.report
@@ -305,9 +295,7 @@ class TestVerifyReportDetails:
 
     def test_report_includes_reasons(self):
         """Report includes the reason/explanation for each verdict."""
-        task = FakeTask(
-            id="T1", acceptance_criteria=["A"]
-        ).to_dict()
+        task = FakeTask(id="T1", acceptance_criteria=["A"]).to_dict()
         response = "1: FAILED: Function foo is missing error handling"
         result = ralph._parse_verify_response(response, task)
         assert "Function foo is missing error handling" in result.report
