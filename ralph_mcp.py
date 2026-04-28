@@ -13,7 +13,7 @@ Exposes 8 MCP tools for monitoring and controlling the ralphzilla sprint loop:
 - rzilla_abort: Abort running sprint
 
 Usage:
-    # From any repo (auto-detects git root from cwd):
+    # Run from the ralphzilla checkout (so uv can find ralphzilla's pyproject.toml):
     uv run --extra mcp python ralph_mcp.py
     # For MCP client config (.mcp.json / opencode.json), use absolute venv path:
     # /path/to/ralphzilla/.venv/bin/python /path/to/ralphzilla/ralph_mcp.py
@@ -23,6 +23,9 @@ Usage:
 By default, the server resolves the project directory by walking up from cwd
 to find the nearest .git directory. This means each project's .mcp.json does
 not need to specify --repo-dir — just set cwd to the project root.
+Note: the uv subprocess (rzilla CLI) is always invoked from the ralphzilla
+checkout directory so that uv resolves its scripts correctly; --repo-dir is
+passed on every command to target the project's prd.json.
 """
 
 from __future__ import annotations
@@ -314,7 +317,7 @@ def rzilla_dry_run(task: str | None = None) -> str:
             cmd,
             capture_output=True,
             text=True,
-            cwd=str(PROJECT_DIR),
+            cwd=str(RALPH_DIR),
             timeout=30,
         )
         output = result.stdout
@@ -382,7 +385,7 @@ def rzilla_run(
                 cmd,
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
-                cwd=str(PROJECT_DIR),
+                cwd=str(RALPH_DIR),
                 start_new_session=True,
             )
 
@@ -429,7 +432,7 @@ def rzilla_add(spec: str) -> str:
             cmd,
             capture_output=True,
             text=True,
-            cwd=str(PROJECT_DIR),
+            cwd=str(RALPH_DIR),
             timeout=60,
         )
         output = result.stdout

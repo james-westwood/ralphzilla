@@ -3585,7 +3585,7 @@ class AiderRunner(AIRunnerBase):
                 agent="aider",
             )
 
-        task_url = f"https://github.com/james-westwood/{self.config.repo}/tree/{branch_name}"
+        task_url = self._build_task_url(branch_name)
         description = task.get("description", "")
         files = task.get("files", [])
         message = (
@@ -3607,6 +3607,7 @@ class AiderRunner(AIRunnerBase):
         for f in files:
             cmd.extend(["--file", str(f)])
 
+        files_before = self._get_changed_files()
         try:
             result = self.runner.run(
                 cmd,
@@ -3615,13 +3616,27 @@ class AiderRunner(AIRunnerBase):
                 start_new_session=True,
             )
             output = result.stdout if result else ""
+            stderr = result.stderr if result else ""
+            if result and result.returncode != 0:
+                if stderr:
+                    output = output + "\n" + stderr if output else stderr
+                return TaskRunResult(
+                    success=False,
+                    task_id=task_id,
+                    branch_name=branch_name,
+                    output=output,
+                    error=f"aider exited with code {result.returncode}",
+                    agent="aider",
+                )
+            files_after = self._get_changed_files()
+            files_changed = list(files_after - files_before)
             return TaskRunResult(
                 success=True,
                 task_id=task_id,
                 branch_name=branch_name,
                 output=output,
                 agent="aider",
-                files_changed=files,
+                files_changed=files_changed,
             )
         except subprocess.TimeoutExpired:
             return TaskRunResult(
@@ -3640,6 +3655,39 @@ class AiderRunner(AIRunnerBase):
                 error=str(e),
                 agent="aider",
             )
+
+    def _build_task_url(self, branch_name: str) -> str:
+        """Derive the task URL from git remote origin."""
+        try:
+            result = self.runner.run(
+                ["git", "remote", "get-url", "origin"],
+                cwd=self.config.repo_path,
+                capture_output=True,
+            )
+            if result and result.returncode == 0:
+                url = result.stdout.strip()
+                if url.startswith("git@"):
+                    url = url.replace("git@", "https://", 1).replace(":", "/", 1)
+                if url.endswith(".git"):
+                    url = url[:-4]
+                return f"{url}/tree/{branch_name}"
+        except Exception:
+            pass
+        return f"https://github.com/james-westwood/{self.config.repo}/tree/{branch_name}"
+
+    def _get_changed_files(self) -> set[str]:
+        """Return set of files modified relative to HEAD via git diff."""
+        try:
+            result = self.runner.run(
+                ["git", "diff", "--name-only", "HEAD"],
+                cwd=self.config.repo_path,
+                capture_output=True,
+            )
+            if result and result.returncode == 0 and result.stdout:
+                return {f for f in result.stdout.splitlines() if f}
+        except Exception:
+            pass
+        return set()
 
     def is_available(self) -> bool:
         return "aider" in self.get_available_runtimes()

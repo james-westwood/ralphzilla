@@ -67,7 +67,7 @@ def test_aider_runner_run_task_builds_correct_command():
     runner = MagicMock(spec=SubprocessRunner)
     logger = MagicMock(spec=RalphLogger)
     config = RuntimeConfig(primary="aider", timeout=600)
-    config.repo_dir = Path("/repo")
+    config.repo_path = Path("/repo")
 
     with patch("ralph.TaskTracker") as mock_tracker_class:
         mock_tracker = MagicMock()
@@ -89,8 +89,12 @@ def test_aider_runner_run_task_builds_correct_command():
         aider = AiderRunner(runner, logger, config)
         aider.run_task("M1-01", "feature-M1-01")
 
-    call_args = runner.run.call_args
-    cmd = call_args.args[0]
+    aider_call = next(
+        c
+        for c in runner.run.call_args_list
+        if c.args and c.args[0][0] == "aider" and "--no-auto-commits" in c.args[0]
+    )
+    cmd = aider_call.args[0]
     assert cmd[0] == "aider"
     assert "--no-auto-commits" in cmd
     assert "--no-git" in cmd
@@ -126,8 +130,12 @@ def test_aider_runner_run_task_with_model():
         aider = AiderRunner(runner, logger, config)
         aider.run_task("M1-01", "feature-M1-01")
 
-    call_args = runner.run.call_args
-    cmd = call_args.args[0]
+    aider_call = next(
+        c
+        for c in runner.run.call_args_list
+        if c.args and c.args[0][0] == "aider" and "--no-auto-commits" in c.args[0]
+    )
+    cmd = aider_call.args[0]
     assert "--model" in cmd
     model_idx = cmd.index("--model")
     assert cmd[model_idx + 1] == "gpt-4"
@@ -236,8 +244,8 @@ def test_aider_runner_start_new_session():
         aider = AiderRunner(runner, logger, config)
         aider.run_task("M1-01", "feature-M1-01")
 
-    call_kwargs = runner.run.call_args.kwargs
-    assert call_kwargs.get("start_new_session") is True
+    aider_call = next(c for c in runner.run.call_args_list if "start_new_session" in c.kwargs)
+    assert aider_call.kwargs.get("start_new_session") is True
 
 
 def test_aider_runner_check_version():
