@@ -3616,10 +3616,9 @@ class AiderRunner(AIRunnerBase):
                 start_new_session=True,
             )
             output = result.stdout if result else ""
-            stderr = result.stderr if result else ""
+            stderr = (result.stderr if result else "") or ""
             if result and result.returncode != 0:
-                if stderr:
-                    output = output + "\n" + stderr if output else stderr
+                output = (output + "\n" + stderr).strip() if stderr else output
                 return TaskRunResult(
                     success=False,
                     task_id=task_id,
@@ -3684,7 +3683,7 @@ class AiderRunner(AIRunnerBase):
                 capture_output=True,
             )
             if result and result.returncode == 0 and result.stdout:
-                return {f for f in result.stdout.splitlines() if f}
+                return {f for f in result.stdout.strip().splitlines() if f.strip()}
         except Exception:
             pass
         return set()

@@ -89,12 +89,13 @@ def test_aider_runner_run_task_builds_correct_command():
         aider = AiderRunner(runner, logger, config)
         aider.run_task("M1-01", "feature-M1-01")
 
-    aider_call = next(
+    aider_calls = [
         c
         for c in runner.run.call_args_list
         if c.args and c.args[0][0] == "aider" and "--no-auto-commits" in c.args[0]
-    )
-    cmd = aider_call.args[0]
+    ]
+    assert aider_calls, "Expected an aider run call with --no-auto-commits"
+    cmd = aider_calls[0].args[0]
     assert cmd[0] == "aider"
     assert "--no-auto-commits" in cmd
     assert "--no-git" in cmd
@@ -130,12 +131,13 @@ def test_aider_runner_run_task_with_model():
         aider = AiderRunner(runner, logger, config)
         aider.run_task("M1-01", "feature-M1-01")
 
-    aider_call = next(
+    aider_calls = [
         c
         for c in runner.run.call_args_list
         if c.args and c.args[0][0] == "aider" and "--no-auto-commits" in c.args[0]
-    )
-    cmd = aider_call.args[0]
+    ]
+    assert aider_calls, "Expected an aider run call with --no-auto-commits"
+    cmd = aider_calls[0].args[0]
     assert "--model" in cmd
     model_idx = cmd.index("--model")
     assert cmd[model_idx + 1] == "gpt-4"
@@ -244,8 +246,9 @@ def test_aider_runner_start_new_session():
         aider = AiderRunner(runner, logger, config)
         aider.run_task("M1-01", "feature-M1-01")
 
-    aider_call = next(c for c in runner.run.call_args_list if "start_new_session" in c.kwargs)
-    assert aider_call.kwargs.get("start_new_session") is True
+    session_calls = [c for c in runner.run.call_args_list if "start_new_session" in c.kwargs]
+    assert session_calls, "Expected a call with start_new_session kwarg"
+    assert session_calls[0].kwargs.get("start_new_session") is True
 
 
 def test_aider_runner_check_version():
