@@ -47,6 +47,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 os.environ.setdefault("MCP_LOG_LEVEL", "ERROR")
@@ -207,6 +208,210 @@ def _make_task_tracker(logger: RalphLogger | None = None) -> TaskTracker:
         _make_runner(logger),
         logger or _make_logger(),
     )
+
+
+def _get_gh_token() -> str:
+    """Get a GitHub API token via gh auth token."""
+    result = subprocess.run(
+        ["gh", "auth", "token"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    token = result.stdout.strip()
+    if not token:
+        raise RuntimeError("gh auth token returned empty — run gh auth login")
+    return token
+
+
+def _get_repo_slug() -> str:
+    """Get the owner/repo slug from the git remote."""
+    result = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+        cwd=str(PROJECT_DIR),
+        timeout=10,
+    )
+    url = result.stdout.strip()
+    if url.startswith("git@github.com:"):
+        return url.removeprefix("git@github.com:").removesuffix(".git")
+    if url.startswith("https://github.com/"):
+        return url.removeprefix("https://github.com/").removesuffix(".git")
+    raise RuntimeError(f"Cannot parse repo slug from remote URL: {url}")
+
+
+def _get_head_sha() -> str:
+    """Get the current HEAD commit SHA."""
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        cwd=str(PROJECT_DIR),
+        timeout=10,
+    )
+    return result.stdout.strip()
+
+
+def _gh_api_get(path: str, token: str) -> dict:
+    """Make an authenticated GitHub REST API GET request."""
+    import httpx
+
+    resp = httpx.get(
+        f"https://api.github.com{path}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _gh_api_get_logs(path: str, token: str) -> str:
+    """Download logs from a GitHub API endpoint."""
+    import httpx
+
+    resp = httpx.get(
+        f"https://api.github.com{path}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        },
+        timeout=30,
+        follow_redirects=True,
+    )
+    return resp.text
+
+
+def _ci_check_sha(head_sha: str, token: str, repo_slug: str) -> dict:
+    """Check CI status for a specific commit SHA via GitHub API.
+
+    Queries: GET /repos/{owner}/{repo}/actions/runs?head_sha={sha}
+    Returns immediately with the current state — no waiting.
+    """
+    data = _gh_api_get(
+        f"/repos/{repo_slug}/actions/runs?head_sha={head_sha}&per_page=5",
+        token,
+    )
+    runs = data.get("workflow_runs", [])
+
+    if not runs:
+        return {
+            "status": "no_workflow",
+            "head_sha": head_sha,
+            "run_id": None,
+            "run_url": None,
+            "failure_logs": None,
+            "duration_seconds": None,
+        }
+
+    latest = runs[0]
+    wf_status = latest.get("status", "unknown")
+    wf_conclusion = latest.get("conclusion")
+    run_id = latest.get("id")
+    html_url = latest.get("html_url", "")
+
+    if wf_status in ("queued", "in_progress", "waiting", "requested", "pending"):
+        return {
+            "status": "running",
+            "head_sha": head_sha,
+            "run_id": run_id,
+            "run_url": html_url,
+            "failure_logs": None,
+            "duration_seconds": None,
+        }
+
+    if wf_conclusion == "success":
+        return {
+            "status": "passed",
+            "head_sha": head_sha,
+            "run_id": run_id,
+            "run_url": html_url,
+            "failure_logs": None,
+            "duration_seconds": None,
+        }
+
+    if wf_conclusion in ("failure", "error", "cancelled", "timed_out"):
+        return {
+            "status": "failed",
+            "head_sha": head_sha,
+            "run_id": run_id,
+            "run_url": html_url,
+            "failure_logs": None,
+            "duration_seconds": None,
+        }
+
+    return {
+        "status": "unknown",
+        "head_sha": head_sha,
+        "run_id": run_id,
+        "run_url": html_url,
+        "failure_logs": None,
+        "duration_seconds": None,
+    }
+
+
+def _ci_wait_sha(
+    head_sha: str,
+    token: str,
+    repo_slug: str,
+    timeout: int = 300,
+) -> dict:
+    """Wait for CI to complete for a specific commit SHA.
+
+    Uses adaptive polling:
+    Phase 1 (0-30s):   every 5s  — run is likely queued
+    Phase 2 (30-120s): every 15s — run is executing
+    Phase 3 (120-300s): every 30s — long-running CI
+    """
+    start = time.time()
+
+    while True:
+        elapsed = time.time() - start
+        if elapsed > timeout:
+            result = _ci_check_sha(head_sha, token, repo_slug)
+            result["status"] = "timeout"
+            return result
+
+        result = _ci_check_sha(head_sha, token, repo_slug)
+
+        if result["status"] in ("passed", "failed", "no_workflow", "unknown"):
+            return result
+
+        if elapsed < 30:
+            interval = 5
+        elif elapsed < 120:
+            interval = 15
+        else:
+            interval = 30
+
+        time.sleep(interval)
+
+
+def _ci_fetch_failure_logs(run_id: int, token: str, repo_slug: str) -> str:
+    """Fetch failure logs for a specific run ID via GitHub API.
+
+    Downloads the run's log archive and returns the content,
+    or falls back to gh run view --log-failed if the API fails.
+    """
+    try:
+        log_text = _gh_api_get_logs(
+            f"/repos/{repo_slug}/actions/runs/{run_id}/logs",
+            token,
+        )
+        return log_text[-4000:] if len(log_text) > 4000 else log_text
+    except Exception:
+        result = subprocess.run(
+            ["gh", "run", "view", str(run_id), "--log-failed"],
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_DIR),
+            timeout=30,
+        )
+        lines = result.stdout.splitlines()[-150:]
+        return "\n".join(lines)
 
 
 def _is_sprint_running() -> bool:
@@ -379,10 +584,12 @@ def rzilla_next_task() -> str:
     tracker = _make_task_tracker()
     task = tracker.get_next_task()
     if task is None:
-        return json.dumps({
-            "next_task": None,
-            "reason": "No tasks ready (all complete or deps unmet)",
-        })
+        return json.dumps(
+            {
+                "next_task": None,
+                "reason": "No tasks ready (all complete or deps unmet)",
+            }
+        )
 
     return json.dumps({"next_task": task}, indent=2)
 
@@ -422,13 +629,15 @@ def rzilla_start_task(task_id: str, resume: bool = False) -> str:
     except Exception as e:
         return json.dumps({"error": f"Failed to create/checkout branch: {e}", "branch": branch})
 
-    return json.dumps({
-        "task_id": task_id,
-        "branch": branch,
-        "existed": status.existed,
-        "had_commits": status.had_commits,
-        "status": "ready_for_coder",
-    })
+    return json.dumps(
+        {
+            "task_id": task_id,
+            "branch": branch,
+            "existed": status.existed,
+            "had_commits": status.had_commits,
+            "status": "ready_for_coder",
+        }
+    )
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
@@ -490,11 +699,13 @@ def rzilla_run_precommit(task_id: str) -> str:
     prd = tracker.load()
     result = gate.run(task, prd, PROJECT_DIR)
 
-    return json.dumps({
-        "task_id": task_id,
-        "passed": result.passed,
-        "rounds_used": result.rounds_used,
-    })
+    return json.dumps(
+        {
+            "task_id": task_id,
+            "passed": result.passed,
+            "rounds_used": result.rounds_used,
+        }
+    )
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -521,11 +732,13 @@ def rzilla_run_tests(task_id: str) -> str:
     prd = tracker.load()
     result = test_runner.run(task, prd)
 
-    return json.dumps({
-        "task_id": task_id,
-        "passed": result.passed,
-        "rounds_used": result.rounds_used,
-    })
+    return json.dumps(
+        {
+            "task_id": task_id,
+            "passed": result.passed,
+            "rounds_used": result.rounds_used,
+        }
+    )
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
@@ -557,24 +770,28 @@ def rzilla_push_branch(task_id: str) -> str:
 
     existing_pr = pr_mgr.get_existing(branch)
     if existing_pr:
-        return json.dumps({
-            "branch": branch,
-            "pr_number": existing_pr.number,
-            "pr_url": existing_pr.url,
-            "pr_status": "existing",
-        })
+        return json.dumps(
+            {
+                "branch": branch,
+                "pr_number": existing_pr.number,
+                "pr_url": existing_pr.url,
+                "pr_status": "existing",
+            }
+        )
 
     try:
         pr_info = pr_mgr.create(branch, task)
     except Exception as e:
         return json.dumps({"error": f"PR creation failed: {e}", "branch": branch})
 
-    return json.dumps({
-        "branch": branch,
-        "pr_number": pr_info.number,
-        "pr_url": pr_info.url,
-        "pr_status": "created",
-    })
+    return json.dumps(
+        {
+            "branch": branch,
+            "pr_number": pr_info.number,
+            "pr_url": pr_info.url,
+            "pr_status": "created",
+        }
+    )
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -610,12 +827,14 @@ def rzilla_run_review(task_id: str, pr_number: int, agent: str = "opencode") -> 
 
     result = review_loop.run(task, pr_number=pr_number, prd=prd, coder=coder, reviewer=reviewer)
 
-    return json.dumps({
-        "task_id": task_id,
-        "pr_number": pr_number,
-        "verdict": result.verdict if hasattr(result, "verdict") else "unknown",
-        "rounds": result.rounds if hasattr(result, "rounds") else 0,
-    })
+    return json.dumps(
+        {
+            "task_id": task_id,
+            "pr_number": pr_number,
+            "verdict": result.verdict if hasattr(result, "verdict") else "unknown",
+            "rounds": result.rounds if hasattr(result, "rounds") else 0,
+        }
+    )
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -644,10 +863,12 @@ def rzilla_wait_ci(pr_number: int, timeout_minutes: int = 30) -> str:
         max_fix_rounds=0,
     )
 
-    return json.dumps({
-        "pr_number": pr_number,
-        "ci_passed": result.passed if hasattr(result, "passed") else False,
-    })
+    return json.dumps(
+        {
+            "pr_number": pr_number,
+            "ci_passed": result.passed if hasattr(result, "passed") else False,
+        }
+    )
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
@@ -719,15 +940,111 @@ def rzilla_commit_partial(task_id: str) -> str:
         check=True,
     )
 
-    return json.dumps({
-        "committed": True,
-        "task_id": task_id,
-        "files_rescued": file_count,
-        "message": f"Committed {file_count} file(s) as partial work — use --resume to continue",
-    })
+    return json.dumps(
+        {
+            "committed": True,
+            "task_id": task_id,
+            "files_rescued": file_count,
+            "message": f"Committed {file_count} file(s) as partial work — use --resume to continue",
+        }
+    )
+
+
+# --- CI Tools (SHA-based, stateful) ---
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def rzilla_ci_check(branch: str | None = None, head_sha: str | None = None) -> str:
+    """Check CI status for a specific commit SHA. Returns immediately — no waiting.
+
+    Key off head_sha, not branch. A branch can have multiple runs from multiple
+    pushes. A SHA has exactly one run. This eliminates the 'new run ID' detection
+    problem that causes false timeouts.
+
+    Args:
+        branch: Branch name (optional — used as fallback if no head_sha)
+        head_sha: Specific commit SHA to check (recommended). Auto-detected from HEAD if omitted.
+
+    Returns:
+        JSON with status (passed/failed/running/no_workflow/timeout), run_id, run_url, head_sha
+    """
+    try:
+        token = _get_gh_token()
+        repo_slug = _get_repo_slug()
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+    if head_sha is None:
+        head_sha = _get_head_sha()
+
+    result = _ci_check_sha(head_sha, token, repo_slug)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def rzilla_ci_wait(
+    head_sha: str | None = None,
+    timeout: int = 300,
+) -> str:
+    """Wait for CI to complete for a specific commit SHA. Polls with backoff.
+
+    Uses adaptive polling: 5s (0-30s), 15s (30-120s), 30s (120-300s).
+    Keys off head_sha — eliminates the 'new run ID' race condition.
+    Returns a structured result with status, run details, and failure logs on failure.
+    Timeout does NOT kill the sprint — returns status='timeout' for the orchestrator
+    to decide what to do.
+
+    Args:
+        head_sha: Commit SHA to wait for. Auto-detected from HEAD if omitted.
+        timeout: Max wait time in seconds (default: 300)
+
+    Returns:
+        JSON with status (passed/failed/timeout/no_workflow), run_id, run_url,
+        failure_logs (if failed), duration_seconds
+    """
+    try:
+        token = _get_gh_token()
+        repo_slug = _get_repo_slug()
+    except Exception as e:
+        return json.dumps({"error": str(e), "status": "error"})
+
+    if head_sha is None:
+        head_sha = _get_head_sha()
+
+    result = _ci_wait_sha(head_sha, token, repo_slug, timeout=timeout)
+
+    if result["status"] == "failed" and result.get("run_id"):
+        result["failure_logs"] = _ci_fetch_failure_logs(
+            result["run_id"],
+            token,
+            repo_slug,
+        )
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def rzilla_ci_logs(run_id: int) -> str:
+    """Fetch failure logs for a specific CI run.
+
+    Args:
+        run_id: The GitHub Actions run ID
+
+    Returns:
+        Failure log text (last ~4000 chars), or error message
+    """
+    try:
+        token = _get_gh_token()
+        repo_slug = _get_repo_slug()
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+    logs = _ci_fetch_failure_logs(run_id, token, repo_slug)
+    return json.dumps({"run_id": run_id, "logs": logs}, indent=2)
 
 
 # --- Legacy Tools (fire-and-forget) ---
+
 
 @mcp.tool(annotations={"readOnlyHint": True})
 def rzilla_dry_run(task: str | None = None) -> str:
