@@ -3431,6 +3431,19 @@ class RuntimeUnavailableError(Exception):
 
 
 @dataclass
+class VerifyResult:
+    """Result of verifying a task's acceptance criteria."""
+
+    passed: bool = False
+    exit_code: int = 1
+    verdicts: list[dict] = field(default_factory=list)
+    report: str = ""
+
+    def __bool__(self) -> bool:
+        return self.passed
+
+
+@dataclass
 class TaskRunResult:
     """Result of running a task with an AI runtime."""
 
@@ -4476,6 +4489,45 @@ class Orchestrator:
         self.runner.kill_active()
         sys.exit(1)
 
+    def _commit_partial_work(self, task: dict, branch: str) -> None:
+        """Commit any uncommitted changes the coder left behind before aborting.
+
+        Without this, the next iteration's ensure_main_up_to_date() does
+        git reset --hard origin/main and wipes the working tree, losing
+        whatever the coder produced before it failed.
+        """
+        dirty = self.runner.run(
+            ["git", "status", "--porcelain"], cwd=self.config.repo_dir
+        )
+        if not dirty.stdout.strip():
+            self.logger.info(
+                "[_commit_partial_work] No uncommitted changes — nothing to preserve"
+            )
+            return
+
+        self.logger.warn(
+            f"[_commit_partial_work] Coder left {len(dirty.stdout.strip().splitlines())} "
+            "changed file(s) — committing as partial work before abort"
+        )
+        self.runner.run(["git", "add", "-A"], cwd=self.config.repo_dir, check=True)
+        task_id = task.get("id", "unknown")
+        task_title = task.get("title", "untitled")
+        self.runner.run(
+            [
+                "git",
+                "commit",
+                "--no-verify",
+                "-m",
+                f"[{task_id}] {task_title} [coder-failed-partial]",
+            ],
+            cwd=self.config.repo_dir,
+            check=True,
+        )
+        self.logger.info(
+            f"[_commit_partial_work] Committed partial work on {branch} — "
+            "resume with --resume to continue from this point"
+        )
+
     def _check_cli(self, cmd: str) -> bool:
         """Check if a CLI command is available."""
         try:
@@ -4630,6 +4682,7 @@ class Orchestrator:
             success = self.ai_runner.run_coder(coder, prompt, self.config.repo_dir)
         except Exception as e:
             self.logger.error(f"[_run_task_standard] Step 3 failed: {e}")
+            self._commit_partial_work(task, branch)
             self._task_results.append(
                 TaskExecutionResult(
                     task_id=task["id"],
@@ -4645,6 +4698,7 @@ class Orchestrator:
             return TaskResult(fatal=True, message=str(e))
         if not success:
             self.logger.error("[_run_task_standard] Step 3: CoderFailedError")
+            self._commit_partial_work(task, branch)
             self._task_results.append(
                 TaskExecutionResult(
                     task_id=task["id"],

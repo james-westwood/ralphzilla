@@ -683,3 +683,83 @@ class TestMainLoop:
         orch.run(max_iterations=2)
 
         assert any("HUMAN" in line for line in log_lines)
+
+
+class TestCommitPartialWork:
+    def test_commits_dirty_files_on_coder_exception(self, config, logger):
+        orch = Orchestrator(config, logger)
+        orch.branch_manager = MagicMock()
+        orch.branch_manager.ensure_main_up_to_date.return_value = None
+        orch.branch_manager.checkout_or_create.return_value = BranchStatus(
+            existed=False, had_commits=False
+        )
+        orch.ai_runner = MagicMock()
+        orch.ai_runner.run_coder.side_effect = RuntimeError("coder crashed")
+        orch.runner = MagicMock()
+        dirty_result = MagicMock()
+        dirty_result.stdout.strip.return_value = "M ralph.py\n?? tests/test_new.py"
+        dirty_result.stdout = "M ralph.py\n?? tests/test_new.py"
+        orch.runner.run.side_effect = None
+        orch.runner.run.return_value = dirty_result
+
+        task = {"id": "T-01", "title": "test_task"}
+        result = orch._run_task_standard(
+            task, "ralph/T-01-test_task", {}, "opencode", "opencode", None
+        )
+
+        assert result.fatal is True
+        git_add_calls = [
+            c for c in orch.runner.run.call_args_list
+            if c[0][0][:2] == ["git", "add"]
+        ]
+        git_commit_calls = [
+            c for c in orch.runner.run.call_args_list
+            if c[0][0][:2] == ["git", "commit"]
+        ]
+        assert len(git_add_calls) == 1
+        assert len(git_commit_calls) == 1
+        assert "coder-failed-partial" in git_commit_calls[0][0][0][-1]
+
+    def test_commits_dirty_files_on_coder_failure(self, config, logger):
+        orch = Orchestrator(config, logger)
+        orch.branch_manager = MagicMock()
+        orch.branch_manager.ensure_main_up_to_date.return_value = None
+        orch.branch_manager.checkout_or_create.return_value = BranchStatus(
+            existed=False, had_commits=False
+        )
+        orch.ai_runner = MagicMock()
+        orch.ai_runner.run_coder.return_value = False
+        orch.runner = MagicMock()
+        dirty_result = MagicMock()
+        dirty_result.stdout = "M ralph.py"
+        orch.runner.run.return_value = dirty_result
+
+        task = {"id": "T-01", "title": "test_task"}
+        result = orch._run_task_standard(
+            task, "ralph/T-01-test_task", {}, "opencode", "opencode", None
+        )
+
+        assert result.fatal is True
+        git_commit_calls = [
+            c for c in orch.runner.run.call_args_list
+            if c[0][0][:2] == ["git", "commit"]
+        ]
+        assert len(git_commit_calls) == 1
+        assert "coder-failed-partial" in git_commit_calls[0][0][0][-1]
+
+    def test_no_commit_when_working_tree_clean(self, config, logger):
+        orch = Orchestrator(config, logger)
+        orch.runner = MagicMock()
+        clean_result = MagicMock()
+        clean_result.stdout.strip.return_value = ""
+        clean_result.stdout.__str__ = lambda self: ""
+        orch.runner.run.return_value = clean_result
+
+        task = {"id": "T-01", "title": "test_task"}
+        orch._commit_partial_work(task, "ralph/T-01-test_task")
+
+        git_commit_calls = [
+            c for c in orch.runner.run.call_args_list
+            if c[0][0][:2] == ["git", "commit"]
+        ]
+        assert len(git_commit_calls) == 0
