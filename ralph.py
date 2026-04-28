@@ -3431,6 +3431,19 @@ class RuntimeUnavailableError(Exception):
 
 
 @dataclass
+class VerifyResult:
+    """Result of verifying a task's acceptance criteria."""
+
+    passed: bool = False
+    exit_code: int = 1
+    verdicts: list[dict] = field(default_factory=list)
+    report: str = ""
+
+    def __bool__(self) -> bool:
+        return self.passed
+
+
+@dataclass
 class TaskRunResult:
     """Result of running a task with an AI runtime."""
 
