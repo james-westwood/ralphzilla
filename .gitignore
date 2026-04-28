@@ -29,3 +29,4 @@ progress.txt
 *.swo
 ralph-summary-*.md
 .ralph/
+ralph-loop.log
