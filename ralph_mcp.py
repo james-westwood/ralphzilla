@@ -2,13 +2,27 @@
 """
 ralph_mcp.py — FastMCP server for ralphzilla AI sprint runner.
 
-Exposes 8 MCP tools for monitoring and controlling the ralphzilla sprint loop:
+Monitoring tools (read-only):
 - rzilla_status: Get sprint status overview
 - rzilla_tasks: List tasks with filtering
 - rzilla_log: Get last N lines of progress log
 - rzilla_summary: Get latest sprint summary
+
+Execution tools (granular, one step at a time — for scrum master control):
+- rzilla_next_task: Get the next task to work on
+- rzilla_start_task: Create branch and prepare for coding
+- rzilla_run_coder: Invoke AI coder on current branch
+- rzilla_run_precommit: Run pre-commit checks (lint/format)
+- rzilla_run_tests: Run pytest and fix failures
+- rzilla_push_branch: Push branch and create PR
+- rzilla_run_review: Invoke AI reviewer on the PR
+- rzilla_wait_ci: Wait for CI and return result
+- rzilla_merge_task: Merge PR, mark task complete
+- rzilla_commit_partial: Rescue uncommitted work from failed coder
+
+Legacy tools (fire-and-forget, still available):
+- rzilla_run: Start a full sprint as background process
 - rzilla_dry_run: Run a dry-run simulation
-- rzilla_run: Start a sprint as background process
 - rzilla_add: Add a new task to the backlog
 - rzilla_abort: Abort running sprint
 
@@ -39,6 +53,19 @@ os.environ.setdefault("MCP_LOG_LEVEL", "ERROR")
 
 import psutil
 from mcp.server.fastmcp import FastMCP
+
+import ralph
+from ralph import (
+    AIRunner,
+    BranchManager,
+    Config,
+    PreCommitGate,
+    PRManager,
+    RalphLogger,
+    SubprocessRunner,
+    TaskTracker,
+    TestRunner,
+)
 
 RALPH_DIR = Path(__file__).parent
 
@@ -139,6 +166,47 @@ def _find_latest_summary() -> Path | None:
     """Find the most recent ralph-summary-*.md file."""
     summaries = sorted(PROJECT_DIR.glob("ralph-summary-*.md"))
     return summaries[-1] if summaries else None
+
+
+def _make_config(**overrides) -> Config:
+    """Build a Config pointing at the current PROJECT_DIR."""
+    defaults = dict(
+        max_iterations=1,
+        skip_review=False,
+        tdd_mode=False,
+        model_mode="random",
+        opencode_model=ralph.DEFAULT_OPENCODE_MODEL,
+        opencode_reviewer_model=ralph.DEFAULT_OPENCODE_REVIEWER_MODEL,
+        opencode_test_writer_model=ralph.DEFAULT_OPENCODE_TEST_WRITER_MODEL,
+        resume=False,
+        repo_dir=PROJECT_DIR,
+        log_file=LOG_FILE,
+        max_precommit_rounds=2,
+        max_review_rounds=2,
+        max_ci_fix_rounds=2,
+        max_test_fix_rounds=2,
+        max_test_write_rounds=2,
+        force_task_id=None,
+    )
+    defaults.update(overrides)
+    return Config(**defaults)
+
+
+def _make_logger() -> RalphLogger:
+    return RalphLogger(LOG_FILE)
+
+
+def _make_runner(logger: RalphLogger | None = None) -> SubprocessRunner:
+    return SubprocessRunner(logger or _make_logger())
+
+
+def _make_task_tracker(logger: RalphLogger | None = None) -> TaskTracker:
+    return TaskTracker(
+        PRD_FILE,
+        PROGRESS_FILE,
+        _make_runner(logger),
+        logger or _make_logger(),
+    )
 
 
 def _is_sprint_running() -> bool:
@@ -294,6 +362,372 @@ def rzilla_summary() -> str:
     except OSError:
         return "No sprint summary found."
 
+
+# --- Granular Execution Tools ---
+# These give the scrum master step-by-step control over the sprint,
+# with reasoning between each action.
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def rzilla_next_task() -> str:
+    """Get the next task to work on (first incomplete ralph-owned task with deps met).
+
+    Returns:
+        JSON with task details (id, title, description, acceptance_criteria, files,
+        depends_on, complexity, epic) or null if no task is ready.
+    """
+    tracker = _make_task_tracker()
+    task = tracker.get_next_task()
+    if task is None:
+        return json.dumps({
+            "next_task": None,
+            "reason": "No tasks ready (all complete or deps unmet)",
+        })
+
+    return json.dumps({"next_task": task}, indent=2)
+
+
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+def rzilla_start_task(task_id: str, resume: bool = False) -> str:
+    """Create/checkout a feature branch for a task and prepare for coding.
+
+    Ensures main is up to date, then creates the branch ralph/{task_id}-{title}.
+    If the branch already exists and resume=True, checks it out instead.
+
+    Args:
+        task_id: The task ID to start (e.g. M6-06)
+        resume: If True, resume on existing branch instead of erroring
+
+    Returns:
+        JSON with branch name, had_commits (for resume), and status
+    """
+    logger = _make_logger()
+    runner = _make_runner(logger)
+    tracker = _make_task_tracker(logger)
+    bm = BranchManager(PROJECT_DIR, runner, logger)
+
+    task = tracker.get_task_by_id(task_id)
+    if task is None:
+        return json.dumps({"error": f"Task '{task_id}' not found in prd.json"})
+
+    branch = f"ralph/{task_id}-{bm.sanitise_branch_name(task.get('title', ''))}"
+
+    try:
+        bm.ensure_main_up_to_date()
+    except Exception as e:
+        return json.dumps({"error": f"Failed to sync main: {e}", "branch": branch})
+
+    try:
+        status = bm.checkout_or_create(branch, resume)
+    except Exception as e:
+        return json.dumps({"error": f"Failed to create/checkout branch: {e}", "branch": branch})
+
+    return json.dumps({
+        "task_id": task_id,
+        "branch": branch,
+        "existed": status.existed,
+        "had_commits": status.had_commits,
+        "status": "ready_for_coder",
+    })
+
+
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+def rzilla_run_coder(task_id: str, agent: str = "opencode") -> str:
+    """Invoke the AI coder to implement a task on the current branch.
+
+    The coder writes code and tests, then commits. The scrum master should
+    call rzilla_start_task first to set up the branch.
+
+    Args:
+        task_id: The task ID to code
+        agent: AI agent to use (opencode, claude, gemini) — default: opencode
+
+    Returns:
+        JSON with success bool, coder output summary, and any error
+    """
+    logger = _make_logger()
+    runner = _make_runner(logger)
+    config = _make_config()
+    tracker = _make_task_tracker(logger)
+    ai_runner = AIRunner(runner, logger, config)
+
+    task = tracker.get_task_by_id(task_id)
+    if task is None:
+        return json.dumps({"error": f"Task '{task_id}' not found in prd.json"})
+
+    prd = tracker.load()
+    prompt = ralph.PromptBuilder.coder_prompt(task, agent, prd, resume=False)
+
+    try:
+        success = ai_runner.run_coder(agent, prompt, PROJECT_DIR)
+    except Exception as e:
+        return json.dumps({"task_id": task_id, "success": False, "error": str(e)})
+
+    return json.dumps({"task_id": task_id, "success": success})
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def rzilla_run_precommit(task_id: str) -> str:
+    """Run pre-commit checks (ruff, lint, format) and optionally fix.
+
+    Args:
+        task_id: The task ID being worked on
+
+    Returns:
+        JSON with passed bool, rounds_used, and any failures
+    """
+    logger = _make_logger()
+    runner = _make_runner(logger)
+    config = _make_config()
+    tracker = _make_task_tracker(logger)
+    ai_runner = AIRunner(runner, logger, config)
+    gate = PreCommitGate(runner, ai_runner, logger, config)
+
+    task = tracker.get_task_by_id(task_id)
+    if task is None:
+        return json.dumps({"error": f"Task '{task_id}' not found in prd.json"})
+
+    prd = tracker.load()
+    result = gate.run(task, prd, PROJECT_DIR)
+
+    return json.dumps({
+        "task_id": task_id,
+        "passed": result.passed,
+        "rounds_used": result.rounds_used,
+    })
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def rzilla_run_tests(task_id: str) -> str:
+    """Run pytest and attempt to fix failures (up to max rounds).
+
+    Args:
+        task_id: The task ID being worked on
+
+    Returns:
+        JSON with passed bool, rounds_used, and test output
+    """
+    logger = _make_logger()
+    runner = _make_runner(logger)
+    config = _make_config()
+    tracker = _make_task_tracker(logger)
+    ai_runner = AIRunner(runner, logger, config)
+    test_runner = TestRunner(runner, ai_runner, tracker, logger, config)
+
+    task = tracker.get_task_by_id(task_id)
+    if task is None:
+        return json.dumps({"error": f"Task '{task_id}' not found in prd.json"})
+
+    prd = tracker.load()
+    result = test_runner.run(task, prd)
+
+    return json.dumps({
+        "task_id": task_id,
+        "passed": result.passed,
+        "rounds_used": result.rounds_used,
+    })
+
+
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+def rzilla_push_branch(task_id: str) -> str:
+    """Push current branch to origin and create a PR if none exists.
+
+    Args:
+        task_id: The task ID being worked on
+
+    Returns:
+        JSON with branch, pr_number, pr_url, or error
+    """
+    logger = _make_logger()
+    runner = _make_runner(logger)
+    tracker = _make_task_tracker(logger)
+    bm = BranchManager(PROJECT_DIR, runner, logger)
+    pr_mgr = PRManager(runner, logger)
+
+    task = tracker.get_task_by_id(task_id)
+    if task is None:
+        return json.dumps({"error": f"Task '{task_id}' not found in prd.json"})
+
+    branch = f"ralph/{task_id}-{bm.sanitise_branch_name(task.get('title', ''))}"
+
+    try:
+        bm.push_branch(branch)
+    except Exception as e:
+        return json.dumps({"error": f"Push failed: {e}", "branch": branch})
+
+    existing_pr = pr_mgr.get_existing(branch)
+    if existing_pr:
+        return json.dumps({
+            "branch": branch,
+            "pr_number": existing_pr.number,
+            "pr_url": existing_pr.url,
+            "pr_status": "existing",
+        })
+
+    try:
+        pr_info = pr_mgr.create(branch, task)
+    except Exception as e:
+        return json.dumps({"error": f"PR creation failed: {e}", "branch": branch})
+
+    return json.dumps({
+        "branch": branch,
+        "pr_number": pr_info.number,
+        "pr_url": pr_info.url,
+        "pr_status": "created",
+    })
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def rzilla_run_review(task_id: str, pr_number: int, agent: str = "opencode") -> str:
+    """Invoke AI code reviewer on a PR.
+
+    Args:
+        task_id: The task ID being reviewed
+        pr_number: The PR number to review
+        agent: AI agent to use for review (default: opencode)
+
+    Returns:
+        JSON with review verdict and review text
+    """
+    logger = _make_logger()
+    runner = _make_runner(logger)
+    config = _make_config()
+    tracker = _make_task_tracker(logger)
+    ai_runner = AIRunner(runner, logger, config)
+    review_loop = ralph.ReviewLoop(
+        pr_mgr=PRManager(runner, logger),
+        ai_runner=ai_runner,
+        logger=logger,
+        config=config,
+    )
+
+    task = tracker.get_task_by_id(task_id)
+    if task is None:
+        return json.dumps({"error": f"Task '{task_id}' not found in prd.json"})
+
+    prd = tracker.load()
+    coder, reviewer, _ = ai_runner.assign_agents(agent)
+
+    result = review_loop.run(task, pr_number=pr_number, prd=prd, coder=coder, reviewer=reviewer)
+
+    return json.dumps({
+        "task_id": task_id,
+        "pr_number": pr_number,
+        "verdict": result.verdict if hasattr(result, "verdict") else "unknown",
+        "rounds": result.rounds if hasattr(result, "rounds") else 0,
+    })
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def rzilla_wait_ci(pr_number: int, timeout_minutes: int = 30) -> str:
+    """Wait for CI checks on a PR and return the result.
+
+    Polls GitHub Actions until CI passes or fails, up to timeout_minutes.
+
+    Args:
+        pr_number: The PR number to check CI for
+        timeout_minutes: Max wait time in minutes (default: 30)
+
+    Returns:
+        JSON with ci_status (PASSED/FAILED/TIMEOUT) and details
+    """
+    logger = _make_logger()
+    runner = _make_runner(logger)
+    config = _make_config()
+    ai_runner = AIRunner(runner, logger, config)
+    ci_poller = ralph.CIPoller(runner, ai_runner, logger, config)
+
+    result = ci_poller.wait_and_fix(
+        pr_number=pr_number,
+        prd=_make_task_tracker(logger).load(),
+        task=_make_task_tracker(logger).get_next_task() or {},
+        max_fix_rounds=0,
+    )
+
+    return json.dumps({
+        "pr_number": pr_number,
+        "ci_passed": result.passed if hasattr(result, "passed") else False,
+    })
+
+
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+def rzilla_merge_task(task_id: str, pr_number: int) -> str:
+    """Merge a PR and mark the task complete in prd.json and progress.txt.
+
+    Args:
+        task_id: The task ID to mark complete
+        pr_number: The PR number to merge
+
+    Returns:
+        JSON with merged bool and task completion status
+    """
+    logger = _make_logger()
+    runner = _make_runner(logger)
+    tracker = _make_task_tracker(logger)
+    pr_mgr = PRManager(runner, logger)
+    bm = BranchManager(PROJECT_DIR, runner, logger)
+
+    try:
+        pr_mgr.merge(pr_number)
+    except Exception as e:
+        return json.dumps({"error": f"Merge failed: {e}", "task_id": task_id})
+
+    bm.ensure_main_up_to_date()
+    tracker.mark_complete(task_id)
+    tracker.append_progress(task_id)
+
+    try:
+        tracker.commit_tracking(task_id)
+    except Exception as e:
+        return json.dumps({"merged": True, "tracking_error": str(e), "task_id": task_id})
+
+    return json.dumps({"merged": True, "task_id": task_id, "pr_number": pr_number})
+
+
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+def rzilla_commit_partial(task_id: str) -> str:
+    """Commit any uncommitted changes on the current branch (rescue from failed coder).
+
+    Use this when the coder fails but has left partial work in the working tree.
+    Prevents the next rzilla_start_task from wiping changes via git reset --hard.
+
+    Args:
+        task_id: The task ID that failed
+
+    Returns:
+        JSON with committed bool and file count
+    """
+    logger = _make_logger()
+    runner = _make_runner(logger)
+    tracker = _make_task_tracker(logger)
+
+    task = tracker.get_task_by_id(task_id)
+    if task is None:
+        return json.dumps({"error": f"Task '{task_id}' not found in prd.json"})
+
+    dirty = runner.run(["git", "status", "--porcelain"], cwd=PROJECT_DIR)
+    if not dirty.stdout.strip():
+        return json.dumps({"committed": False, "reason": "No uncommitted changes"})
+
+    file_count = len(dirty.stdout.strip().splitlines())
+    task_title = task.get("title", "untitled")
+
+    runner.run(["git", "add", "-A"], cwd=PROJECT_DIR, check=True)
+    runner.run(
+        ["git", "commit", "--no-verify", "-m", f"[{task_id}] {task_title} [coder-failed-partial]"],
+        cwd=PROJECT_DIR,
+        check=True,
+    )
+
+    return json.dumps({
+        "committed": True,
+        "task_id": task_id,
+        "files_rescued": file_count,
+        "message": f"Committed {file_count} file(s) as partial work — use --resume to continue",
+    })
+
+
+# --- Legacy Tools (fire-and-forget) ---
 
 @mcp.tool(annotations={"readOnlyHint": True})
 def rzilla_dry_run(task: str | None = None) -> str:

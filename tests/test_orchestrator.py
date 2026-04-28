@@ -708,13 +708,9 @@ class TestCommitPartialWork:
         )
 
         assert result.fatal is True
-        git_add_calls = [
-            c for c in orch.runner.run.call_args_list
-            if c[0][0][:2] == ["git", "add"]
-        ]
+        git_add_calls = [c for c in orch.runner.run.call_args_list if c[0][0][:2] == ["git", "add"]]
         git_commit_calls = [
-            c for c in orch.runner.run.call_args_list
-            if c[0][0][:2] == ["git", "commit"]
+            c for c in orch.runner.run.call_args_list if c[0][0][:2] == ["git", "commit"]
         ]
         assert len(git_add_calls) == 1
         assert len(git_commit_calls) == 1
@@ -741,8 +737,7 @@ class TestCommitPartialWork:
 
         assert result.fatal is True
         git_commit_calls = [
-            c for c in orch.runner.run.call_args_list
-            if c[0][0][:2] == ["git", "commit"]
+            c for c in orch.runner.run.call_args_list if c[0][0][:2] == ["git", "commit"]
         ]
         assert len(git_commit_calls) == 1
         assert "coder-failed-partial" in git_commit_calls[0][0][0][-1]
@@ -759,7 +754,6 @@ class TestCommitPartialWork:
         orch._commit_partial_work(task, "ralph/T-01-test_task")
 
         git_commit_calls = [
-            c for c in orch.runner.run.call_args_list
-            if c[0][0][:2] == ["git", "commit"]
+            c for c in orch.runner.run.call_args_list if c[0][0][:2] == ["git", "commit"]
         ]
         assert len(git_commit_calls) == 0

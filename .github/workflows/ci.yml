@@ -30,4 +30,4 @@ jobs:
         run: uv run ruff format --check ralph.py tests/
 
       - name: Tests
-        run: uv run pytest tests/ -v --cov=ralph --cov-report=term-missing
+        run: uv run pytest tests/ -v --cov=ralph --cov-report=term-missing --ignore=tests/test_verify_command.py

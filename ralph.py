@@ -4496,13 +4496,9 @@ class Orchestrator:
         git reset --hard origin/main and wipes the working tree, losing
         whatever the coder produced before it failed.
         """
-        dirty = self.runner.run(
-            ["git", "status", "--porcelain"], cwd=self.config.repo_dir
-        )
+        dirty = self.runner.run(["git", "status", "--porcelain"], cwd=self.config.repo_dir)
         if not dirty.stdout.strip():
-            self.logger.info(
-                "[_commit_partial_work] No uncommitted changes — nothing to preserve"
-            )
+            self.logger.info("[_commit_partial_work] No uncommitted changes — nothing to preserve")
             return
 
         self.logger.warn(
