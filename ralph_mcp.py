@@ -584,10 +584,12 @@ def rzilla_next_task() -> str:
     tracker = _make_task_tracker()
     task = tracker.get_next_task()
     if task is None:
-        return json.dumps({
-            "next_task": None,
-            "reason": "No tasks ready (all complete or deps unmet)",
-        })
+        return json.dumps(
+            {
+                "next_task": None,
+                "reason": "No tasks ready (all complete or deps unmet)",
+            }
+        )
 
     return json.dumps({"next_task": task}, indent=2)
 
@@ -627,13 +629,15 @@ def rzilla_start_task(task_id: str, resume: bool = False) -> str:
     except Exception as e:
         return json.dumps({"error": f"Failed to create/checkout branch: {e}", "branch": branch})
 
-    return json.dumps({
-        "task_id": task_id,
-        "branch": branch,
-        "existed": status.existed,
-        "had_commits": status.had_commits,
-        "status": "ready_for_coder",
-    })
+    return json.dumps(
+        {
+            "task_id": task_id,
+            "branch": branch,
+            "existed": status.existed,
+            "had_commits": status.had_commits,
+            "status": "ready_for_coder",
+        }
+    )
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
@@ -695,11 +699,13 @@ def rzilla_run_precommit(task_id: str) -> str:
     prd = tracker.load()
     result = gate.run(task, prd, PROJECT_DIR)
 
-    return json.dumps({
-        "task_id": task_id,
-        "passed": result.passed,
-        "rounds_used": result.rounds_used,
-    })
+    return json.dumps(
+        {
+            "task_id": task_id,
+            "passed": result.passed,
+            "rounds_used": result.rounds_used,
+        }
+    )
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -726,11 +732,13 @@ def rzilla_run_tests(task_id: str) -> str:
     prd = tracker.load()
     result = test_runner.run(task, prd)
 
-    return json.dumps({
-        "task_id": task_id,
-        "passed": result.passed,
-        "rounds_used": result.rounds_used,
-    })
+    return json.dumps(
+        {
+            "task_id": task_id,
+            "passed": result.passed,
+            "rounds_used": result.rounds_used,
+        }
+    )
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
@@ -762,24 +770,28 @@ def rzilla_push_branch(task_id: str) -> str:
 
     existing_pr = pr_mgr.get_existing(branch)
     if existing_pr:
-        return json.dumps({
-            "branch": branch,
-            "pr_number": existing_pr.number,
-            "pr_url": existing_pr.url,
-            "pr_status": "existing",
-        })
+        return json.dumps(
+            {
+                "branch": branch,
+                "pr_number": existing_pr.number,
+                "pr_url": existing_pr.url,
+                "pr_status": "existing",
+            }
+        )
 
     try:
         pr_info = pr_mgr.create(branch, task)
     except Exception as e:
         return json.dumps({"error": f"PR creation failed: {e}", "branch": branch})
 
-    return json.dumps({
-        "branch": branch,
-        "pr_number": pr_info.number,
-        "pr_url": pr_info.url,
-        "pr_status": "created",
-    })
+    return json.dumps(
+        {
+            "branch": branch,
+            "pr_number": pr_info.number,
+            "pr_url": pr_info.url,
+            "pr_status": "created",
+        }
+    )
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -815,12 +827,14 @@ def rzilla_run_review(task_id: str, pr_number: int, agent: str = "opencode") -> 
 
     result = review_loop.run(task, pr_number=pr_number, prd=prd, coder=coder, reviewer=reviewer)
 
-    return json.dumps({
-        "task_id": task_id,
-        "pr_number": pr_number,
-        "verdict": result.verdict if hasattr(result, "verdict") else "unknown",
-        "rounds": result.rounds if hasattr(result, "rounds") else 0,
-    })
+    return json.dumps(
+        {
+            "task_id": task_id,
+            "pr_number": pr_number,
+            "verdict": result.verdict if hasattr(result, "verdict") else "unknown",
+            "rounds": result.rounds if hasattr(result, "rounds") else 0,
+        }
+    )
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -849,10 +863,12 @@ def rzilla_wait_ci(pr_number: int, timeout_minutes: int = 30) -> str:
         max_fix_rounds=0,
     )
 
-    return json.dumps({
-        "pr_number": pr_number,
-        "ci_passed": result.passed if hasattr(result, "passed") else False,
-    })
+    return json.dumps(
+        {
+            "pr_number": pr_number,
+            "ci_passed": result.passed if hasattr(result, "passed") else False,
+        }
+    )
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
@@ -924,12 +940,14 @@ def rzilla_commit_partial(task_id: str) -> str:
         check=True,
     )
 
-    return json.dumps({
-        "committed": True,
-        "task_id": task_id,
-        "files_rescued": file_count,
-        "message": f"Committed {file_count} file(s) as partial work — use --resume to continue",
-    })
+    return json.dumps(
+        {
+            "committed": True,
+            "task_id": task_id,
+            "files_rescued": file_count,
+            "message": f"Committed {file_count} file(s) as partial work — use --resume to continue",
+        }
+    )
 
 
 # --- CI Tools (SHA-based, stateful) ---
@@ -997,7 +1015,9 @@ def rzilla_ci_wait(
 
     if result["status"] == "failed" and result.get("run_id"):
         result["failure_logs"] = _ci_fetch_failure_logs(
-            result["run_id"], token, repo_slug,
+            result["run_id"],
+            token,
+            repo_slug,
         )
 
     return json.dumps(result, indent=2)
@@ -1024,6 +1044,7 @@ def rzilla_ci_logs(run_id: int) -> str:
 
 
 # --- Legacy Tools (fire-and-forget) ---
+
 
 @mcp.tool(annotations={"readOnlyHint": True})
 def rzilla_dry_run(task: str | None = None) -> str:
