@@ -385,6 +385,7 @@ def rzilla_run(
                 cmd,
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
                 cwd=str(RALPH_DIR),
                 start_new_session=True,
             )
