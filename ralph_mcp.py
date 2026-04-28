@@ -19,6 +19,7 @@ Execution tools (granular, one step at a time — for scrum master control):
 - rzilla_wait_ci: Wait for CI and return result
 - rzilla_merge_task: Merge PR, mark task complete
 - rzilla_commit_partial: Rescue uncommitted work from failed coder
+- rzilla_verify: Verify a task's acceptance criteria against code
 
 Legacy tools (fire-and-forget, still available):
 - rzilla_run: Start a full sprint as background process
@@ -1041,6 +1042,45 @@ def rzilla_ci_logs(run_id: int) -> str:
 
     logs = _ci_fetch_failure_logs(run_id, token, repo_slug)
     return json.dumps({"run_id": run_id, "logs": logs}, indent=2)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def rzilla_verify(task_id: str, agent: str | None = None) -> str:
+    """Verify a task's acceptance criteria against the implemented code using AI.
+
+    Reads the task's acceptance_criteria from prd.json, gathers the code from
+    the files listed in the task, sends both to an AI for evaluation, and
+    returns a structured verdict with pass/fail/partial per criterion.
+
+    Args:
+        task_id: The task ID to verify (e.g. M6-06)
+        agent: AI agent to use (default: gemini)
+
+    Returns:
+        JSON with passed (bool), exit_code (int), verdicts (list),
+        report (str)
+    """
+    logger = _make_logger()
+    runner = _make_runner(logger)
+    tracker = _make_task_tracker(logger)
+    config = _make_config()
+    ai_runner = AIRunner(runner, logger, config)
+
+    task = tracker.get_task_by_id(task_id)
+    if task is None:
+        return json.dumps({"error": f"Task '{task_id}' not found in prd.json"})
+
+    result = ralph._run_verify(task, tracker, ai_runner, PROJECT_DIR, agent)
+    return json.dumps(
+        {
+            "task_id": task_id,
+            "passed": result.passed,
+            "exit_code": result.exit_code,
+            "verdicts": result.verdicts,
+            "report": result.report,
+        },
+        indent=2,
+    )
 
 
 # --- Legacy Tools (fire-and-forget) ---
