@@ -1511,7 +1511,7 @@
     {
       "id": "M7-01",
       "title": "ci_gate_enforcement_research",
-      "description": "Research and design the CI gate enforcement system for ralphzilla. This system will ensure that only passing builds can merge to main. Research should cover: (1) GitHub branch protection rules and required status checks, (2) integration with existing pytest and ruff quality checks, (3) whether to use GitHub Actions or external CI, (4) how to handle the pre-commit hook issue mentioned in CLAUDE.md where --no-verify is currently used. The output should be a design document recommending the approach, including specific configuration files needed, workflow files, and any code changes to ralph.py to support CI integration. Do NOT implement the solution in this task — only research and produce the design.",
+      "description": "Research and design the CI gate enforcement system for ralphzilla. This system will ensure that only passing builds can merge to main. Research should cover: (1) GitHub branch protection rules and required status checks, (2) integration with existing pytest and ruff quality checks, (3) whether to use GitHub Actions or external CI, (4) how to handle the pre-commit hook issue mentioned in CLAUDE.md where --no-verify is currently used. The output should be a design document recommending the approach, including specific configuration files needed, workflow files, and any code changes to ralph.py to support CI integration. Do NOT implement the solution in this task \u2014 only research and produce the design.",
       "acceptance_criteria": [
         "docs/ci_gate_design.md exists with complete research findings",
         "docs/ci_gate_design.md includes comparison of GitHub Actions vs alternatives",
@@ -1525,6 +1525,32 @@
       "depends_on": [],
       "epic": "M7",
       "complexity": 2
+    },
+    {
+      "id": "M6-15",
+      "epic": "M6",
+      "title": "copilot_review_and_autofix",
+      "owner": "ralph",
+      "complexity": 2,
+      "description": "Add optional Copilot PR review and autofix as a post-PR-creation step. When enabled: (1) after PR creation, request Copilot review via `gh pr edit PR --add-reviewer @copilot`; (2) after review arrives, optionally comment `@copilot fix <issues>` to have Copilot push fix commits directly to the branch. Both steps are controlled by flags `--copilot-review` and `--copilot-autofix` (default: off). This gives the sprint runner an automated second opinion and a cheap fix loop before the human scrum master reviews.",
+      "acceptance_criteria": [
+        "ralph.py: Config gains copilot_review and copilot_autofix boolean fields (default False)",
+        "ralph.py: After PRManager.create_pr(), if copilot_review is True, call gh pr edit PR --add-reviewer @copilot",
+        "ralph.py: Poll for Copilot review completion (same CIPoller SHA-based wait mechanism)",
+        "ralph.py: If copilot_autofix is True and Copilot left review comments, post @copilot fix comment summarising the issues",
+        "ralph.py: Wait for Copilot to push fix commits (detect via SHA change), then re-run CI",
+        "ralph.py: --copilot-review and --copilot-autofix CLI flags added",
+        "tests/test_copilot_integration.py: Mocked Copilot review request is issued after PR creation",
+        "tests/test_copilot_integration.py: Mocked @copilot fix comment is posted when autofix enabled",
+        "tests/test_copilot_integration.py: Both flags default to off \u2014 no Copilot interaction unless explicitly enabled"
+      ],
+      "files": [
+        "ralph.py",
+        "tests/test_copilot_integration.py"
+      ],
+      "depends_on": [],
+      "completed": false,
+      "priority": 0
     }
   ]
 }
