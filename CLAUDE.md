@@ -24,6 +24,10 @@ AI sprint runner — executes `prd.json` backlogs via AI agents with autonomous 
 - Never commit directly to `main`
 - No AI attribution in commits, PRs, or issues
 - **Commit before ruff.** After editing a file, commit it immediately with `--no-verify` before running `ruff format` or any tool that touches the file. Ruff can silently discard uncommitted edits. If you commit first, `git checkout -- <file>` recovers anything lost. This rule applies to scrum masters and coders alike.
+- **Commit as ralphzilla[bot].** All commits must use the bot identity so `james-westwood` can approve PRs under branch protection. Always commit with:
+  ```
+  env GIT_AUTHOR_NAME="ralphzilla[bot]" GIT_AUTHOR_EMAIL="280339145+ralphzilla[bot]@users.noreply.github.com" GIT_COMMITTER_NAME="ralphzilla[bot]" GIT_COMMITTER_EMAIL="280339145+ralphzilla[bot]@users.noreply.github.com" git commit --no-verify -m "message"
+  ```
 
 ## Stack
 
