@@ -57,6 +57,7 @@ LOG_FILE_NAME = "ralph.log"
 PRD_FILE = "prd.json"
 PROGRESS_FILE = "progress.txt"
 SUMMARY_FILE_PREFIX = "ralph-summary"
+DEFAULT_AGENT = "opencode"
 DEFAULT_OPENCODE_MODEL = "opencode/big-pickle"
 DEFAULT_OPENCODE_REVIEWER_MODEL = "opencode/kimi-k2.5"
 DEFAULT_OPENCODE_TEST_WRITER_MODEL = "opencode/minimax-m2.7"
@@ -967,11 +968,8 @@ class ReviewQualityChecker:
             return result, ""
 
         self.logger.warn(f"Review quality check failed: {result.reason}")
-        if self.config.opencode_only:
-            available_agents = ["opencode", "gemini", "claude"]
-        else:
-            available_agents = ["gemini", "opencode", "claude"]
-        retry_agent = available_agents[(round_num + 1) % len(available_agents)]
+        available_agents = ["opencode", "gemini", "claude"]
+        retry_agent = available_agents[(round_num - 1) % len(available_agents)]
         return result, retry_agent
 
 
@@ -1128,7 +1126,7 @@ class PlanConsensus:
 
             critic_prompt = PromptBuilder.critic_prompt(plan_output)
             self.logger.info("Invoking Critic agent")
-            critic_output = self.ai_runner.run_reviewer("claude", critic_prompt)
+            critic_output = self.ai_runner.run_reviewer(DEFAULT_AGENT, critic_prompt)
 
             verdict, reason = self._parse_critic(critic_output)
 
@@ -4027,7 +4025,7 @@ class AIRunner:
     def run_test_writer(self, prompt: str, cwd: Path, agent: str | None = None) -> bool:
         """Test writer always uses a different model from coder."""
         if agent is None:
-            agent = "gemini" if self._is_nested_claude_session() else "claude"
+            agent = "gemini" if self._is_nested_claude_session() else DEFAULT_AGENT
         if agent == "opencode":
             return self.run_coder(
                 agent,
@@ -4040,7 +4038,7 @@ class AIRunner:
     def run_decompose(self, task: dict) -> list[dict]:
         """AI decompose complexity-3 task."""
         prompt = PromptBuilder.decompose_prompt(task)
-        output = self.run_reviewer("claude", prompt)
+        output = self.run_reviewer(DEFAULT_AGENT, prompt)
         try:
             match = re.search(r"\[\s*{.*}\s*\]", output, re.DOTALL)
             if match:
@@ -4318,7 +4316,7 @@ class TestQualityChecker:
             "\n".join(deterministic_issues) if not deterministic_issues else "Tier 1 passed"
         )
         prompt = PromptBuilder.test_quality_prompt(task, test_source, ast_report)
-        ai_output = self.ai_runner.run_reviewer("claude", prompt)
+        ai_output = self.ai_runner.run_reviewer(DEFAULT_AGENT, prompt)
 
         ai_issues = []
         hollow_tests = []

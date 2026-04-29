@@ -136,7 +136,7 @@ def test_run_test_writer_uses_different_model():
     ai.run_test_writer("test prompt", Path("."))
 
     call_args = runner.run.call_args[0][0]
-    assert call_args[0] in ("claude", "gemini")
+    assert call_args[0] in ("opencode", "gemini")
 
 
 def test_run_reviewer_opencode_uses_reviewer_model():
