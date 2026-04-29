@@ -113,6 +113,7 @@ Implement the `ScrumMaster` layer described in the rewrite plan above `ralph.py`
 - [ ] `BacklogManager` — creates FIX tickets from APPROVED-with-comments reviews; never touches in-flight tasks
 - [ ] `EscalationManager` — circuit breakers; escalates to human when stuck
 - [ ] `ScrumMaster._post_sprint_cleanup()` — deletes stale ralph branches after sprint
+- [ ] `ScrumMaster._append_lessons()` — appends hard-won knowledge to `lessons-learnt.txt` after each sprint (format: `[<sprint-id> <date>] <lesson>`); loaded into `PromptBuilder` context so coders avoid repeating mistakes
 - [ ] `ralph scrum` command (or standalone `scrum.py`) — runs the Scrum Master loop
 
 ### Success criteria

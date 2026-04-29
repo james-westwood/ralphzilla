@@ -14,6 +14,7 @@ AI sprint runner — executes `prd.json` backlogs via AI agents with autonomous 
 | `roadmap.md` | Milestone plan |
 | `prd.json` | Task backlog |
 | `ralph.py` | The entire implementation (single file) |
+| `lessons-learnt.txt` | Sprint-to-sprint memory — append-only, loaded into prompt context by `PromptBuilder` |
 
 ## Non-negotiable constraints
 
