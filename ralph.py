@@ -39,8 +39,13 @@ import yaml
 try:
     import jwt
 except ImportError:
+    class _JWTPyJWTError(ImportError):
+        """Placeholder for jwt.PyJWTError when PyJWT is not installed."""
+
     class _MissingJWTModule:  # type: ignore[no-redef]
-        PyJWTError = Exception  # allow except-clause references even without PyJWT
+        # Expose a narrow fallback so except-clause references compile when PyJWT is absent.
+        # ImportError will still propagate uncaught from __getattr__ (not masked by this class).
+        PyJWTError = _JWTPyJWTError
 
         def __getattr__(self, name: str) -> object:
             raise ImportError(

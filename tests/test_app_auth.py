@@ -60,6 +60,7 @@ class TestAppAuthTokenRefresh:
 
     def test_token_refreshed_near_expiry(self):
         auth = AppAuth(app_id=BOT_APP_ID, private_key_pem="dummy", install_id=123)
+        # Fixed Unix timestamp (2023-11-14) — deterministic, avoids time.time() drift
         now = 1_700_000_000
         auth._token = "ghs_old"
         auth._token_expires = now  # expired: now >= _token_expires - margin
