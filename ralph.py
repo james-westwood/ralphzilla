@@ -16,7 +16,6 @@ Run with --help for full option list.
 import ast
 import asyncio
 import enum
-import httpx
 import json
 import os
 import re
@@ -32,6 +31,7 @@ from datetime import datetime
 from pathlib import Path
 
 import click
+import httpx
 import yaml
 
 # --- Constants ---
@@ -4396,25 +4396,17 @@ class CIPoller:
         result = self.runner.run(["gh", "auth", "token"], check=True)
         token = result.stdout.strip()
         if not token:
-            raise RuntimeError(
-                "gh auth token returned empty -- run gh auth login"
-            )
+            raise RuntimeError("gh auth token returned empty -- run gh auth login")
         return token
 
     def _get_repo_slug(self) -> str:
-        result = self.runner.run(
-            ["git", "remote", "get-url", "origin"], check=True
-        )
+        result = self.runner.run(["git", "remote", "get-url", "origin"], check=True)
         url = result.stdout.strip()
         if url.startswith("git@github.com:"):
             return url.removeprefix("git@github.com:").removesuffix(".git")
         if url.startswith("https://github.com/"):
-            return url.removeprefix("https://github.com/").removesuffix(
-                ".git"
-            )
-        raise RuntimeError(
-            f"Cannot parse repo slug from remote URL: {url}"
-        )
+            return url.removeprefix("https://github.com/").removesuffix(".git")
+        raise RuntimeError(f"Cannot parse repo slug from remote URL: {url}")
 
     def _gh_api_get(self, path: str) -> dict:
         token = self._get_gh_token()
@@ -4431,9 +4423,7 @@ class CIPoller:
         return resp.json()
 
     def _ci_check_sha(self, head_sha: str) -> dict:
-        data = self._gh_api_get(
-            f"/actions/runs?head_sha={head_sha}&per_page=5"
-        )
+        data = self._gh_api_get(f"/actions/runs?head_sha={head_sha}&per_page=5")
         runs = data.get("workflow_runs", [])
 
         if not runs:
@@ -4513,8 +4503,7 @@ class CIPoller:
                 return result
 
             self.logger.info(
-                f"CI for SHA {head_sha[:8]}: {result['status']} "
-                f"({elapsed:.0f}s elapsed)"
+                f"CI for SHA {head_sha[:8]}: {result['status']} ({elapsed:.0f}s elapsed)"
             )
 
             if elapsed < 30:
@@ -4531,8 +4520,7 @@ class CIPoller:
             token = self._get_gh_token()
             repo_slug = self._get_repo_slug()
             resp = httpx.get(
-                f"https://api.github.com/repos/{repo_slug}"
-                f"/actions/runs/{run_id}/logs",
+                f"https://api.github.com/repos/{repo_slug}/actions/runs/{run_id}/logs",
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Accept": "application/vnd.github+json",
@@ -4551,9 +4539,7 @@ class CIPoller:
             return "\n".join(lines)
 
     def wait_for_completion(self, pr_number: int, branch: str) -> CIResult:
-        self.logger.info(
-            f"Waiting for CI on PR #{pr_number} (branch: {branch})"
-        )
+        self.logger.info(f"Waiting for CI on PR #{pr_number} (branch: {branch})")
 
         head_sha = self._get_head_sha()
         self.logger.info(f"Polling CI for SHA: {head_sha[:8]}")
@@ -4580,9 +4566,7 @@ class CIPoller:
             pr_manager = PRManager(self.runner, self.logger)
             checks = pr_manager.get_checks(pr_number)
         except Exception as exc:
-            self.logger.warn(
-                f"Could not fetch PR checks (skipping required-check filter): {exc}"
-            )
+            self.logger.warn(f"Could not fetch PR checks (skipping required-check filter): {exc}")
             return False, []
 
         required_failures = []
@@ -4601,18 +4585,14 @@ class CIPoller:
 
         return bool(required_failures), required_failures
 
-    def wait_and_fix(
-        self, task: dict, pr_number: int, branch: str, prd: dict
-    ) -> CIResult:
+    def wait_and_fix(self, task: dict, pr_number: int, branch: str, prd: dict) -> CIResult:
         rounds_used = 0
 
         while rounds_used < self.config.max_ci_fix_rounds:
             result = self.wait_for_completion(pr_number, branch)
 
             if result.passed:
-                has_required_failure, failing_required = (
-                    self._check_required_failures(pr_number)
-                )
+                has_required_failure, failing_required = self._check_required_failures(pr_number)
                 if not has_required_failure:
                     return CIResult(passed=True, rounds_used=rounds_used)
                 self.logger.warn(
@@ -4620,16 +4600,12 @@ class CIPoller:
                 )
 
             rounds_used += 1
-            self.logger.warn(
-                f"CI failed (round {rounds_used}/{self.config.max_ci_fix_rounds})"
-            )
+            self.logger.warn(f"CI failed (round {rounds_used}/{self.config.max_ci_fix_rounds})")
 
             if rounds_used >= self.config.max_ci_fix_rounds:
                 break
 
-            self.logger.info(
-                "Fetching CI logs and invoking coder fix loop..."
-            )
+            self.logger.info("Fetching CI logs and invoking coder fix loop...")
 
             head_sha = self._get_head_sha()
             check_result = self._ci_check_sha(head_sha)
@@ -4647,29 +4623,19 @@ class CIPoller:
 
             prompt = PromptBuilder.ci_fix_prompt(task, failure_log_text)
             coder, _, _ = self.ai_runner.assign_agents(task)
-            success = self.ai_runner.run_coder(
-                coder, prompt, self.config.repo_dir
-            )
+            success = self.ai_runner.run_coder(coder, prompt, self.config.repo_dir)
 
             if not success:
                 self.logger.error("Coder fix loop failed")
                 raise CIFailedFatal(f"Coder failed on round {rounds_used}")
 
-            self.logger.info(
-                "Pushing fix and waiting for CI on new commit..."
-            )
+            self.logger.info("Pushing fix and waiting for CI on new commit...")
 
-            branch_manager = BranchManager(
-                self.config.repo_dir, self.runner, self.logger
-            )
+            branch_manager = BranchManager(self.config.repo_dir, self.runner, self.logger)
             branch_manager.push_branch(branch)
 
-        self.logger.error(
-            f"CI still failing after {rounds_used} fix rounds"
-        )
-        raise CIFailedFatal(
-            f"CI still failing after {rounds_used} fix rounds"
-        )
+        self.logger.error(f"CI still failing after {rounds_used} fix rounds")
+        raise CIFailedFatal(f"CI still failing after {rounds_used} fix rounds")
 
 
 class Orchestrator:
