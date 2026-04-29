@@ -1,0 +1,5 @@
+[S1-03 2026-04-29] ruff format silently discards uncommitted edits — always commit before ruff
+[S1-03 2026-04-29] CIPoller: branch-based run ID detection has race condition — use commit SHA instead
+[S1-04 2026-04-28] Pre-commit hook switches HEAD to main — always use --no-verify
+[S1-04 2026-04-28] Cherry-pick to correct branch after accidental commit, then reset the wrong branch with git branch -f
+[S1-06 2026-04-29] edit tool can silently lose changes if ruff format runs before the edit is flushed to disk — commit immediately after editing

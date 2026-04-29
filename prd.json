@@ -1331,7 +1331,7 @@
         "ralph.py: verify() CLI command implemented with click"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [],
       "epic": "M6",
       "complexity": 2
@@ -1511,7 +1511,7 @@
     {
       "id": "M7-01",
       "title": "ci_gate_enforcement_research",
-      "description": "Research and design the CI gate enforcement system for ralphzilla. This system will ensure that only passing builds can merge to main. Research should cover: (1) GitHub branch protection rules and required status checks, (2) integration with existing pytest and ruff quality checks, (3) whether to use GitHub Actions or external CI, (4) how to handle the pre-commit hook issue mentioned in CLAUDE.md where --no-verify is currently used. The output should be a design document recommending the approach, including specific configuration files needed, workflow files, and any code changes to ralph.py to support CI integration. Do NOT implement the solution in this task — only research and produce the design.",
+      "description": "Research and design the CI gate enforcement system for ralphzilla. This system will ensure that only passing builds can merge to main. Research should cover: (1) GitHub branch protection rules and required status checks, (2) integration with existing pytest and ruff quality checks, (3) whether to use GitHub Actions or external CI, (4) how to handle the pre-commit hook issue mentioned in CLAUDE.md where --no-verify is currently used. The output should be a design document recommending the approach, including specific configuration files needed, workflow files, and any code changes to ralph.py to support CI integration. Do NOT implement the solution in this task \u2014 only research and produce the design.",
       "acceptance_criteria": [
         "docs/ci_gate_design.md exists with complete research findings",
         "docs/ci_gate_design.md includes comparison of GitHub Actions vs alternatives",
@@ -1525,6 +1525,55 @@
       "depends_on": [],
       "epic": "M7",
       "complexity": 2
+    },
+    {
+      "id": "M6-15",
+      "epic": "M6",
+      "title": "copilot_review_and_autofix",
+      "owner": "ralph",
+      "complexity": 2,
+      "description": "Add optional Copilot PR review and autofix as a post-PR-creation step. When enabled: (1) after PR creation, request Copilot review via `gh pr edit PR --add-reviewer @copilot`; (2) after review arrives, optionally comment `@copilot fix <issues>` to have Copilot push fix commits directly to the branch. Both steps are controlled by flags `--copilot-review` and `--copilot-autofix` (default: off). This gives the sprint runner an automated second opinion and a cheap fix loop before the human scrum master reviews.",
+      "acceptance_criteria": [
+        "ralph.py: Config gains copilot_review and copilot_autofix boolean fields (default False)",
+        "ralph.py: After PRManager.create_pr(), if copilot_review is True, call gh pr edit PR --add-reviewer @copilot",
+        "ralph.py: Poll for Copilot review completion (same CIPoller SHA-based wait mechanism)",
+        "ralph.py: If copilot_autofix is True and Copilot left review comments, post @copilot fix comment summarising the issues",
+        "ralph.py: Wait for Copilot to push fix commits (detect via SHA change), then re-run CI",
+        "ralph.py: --copilot-review and --copilot-autofix CLI flags added",
+        "tests/test_copilot_integration.py: Mocked Copilot review request is issued after PR creation",
+        "tests/test_copilot_integration.py: Mocked @copilot fix comment is posted when autofix enabled",
+        "tests/test_copilot_integration.py: Both flags default to off \u2014 no Copilot interaction unless explicitly enabled"
+      ],
+      "files": [
+        "ralph.py",
+        "tests/test_copilot_integration.py"
+      ],
+      "depends_on": [],
+      "completed": false,
+      "priority": 0
+    },
+    {
+      "id": "M6-16",
+      "epic": "M6",
+      "title": "multi_project_mcp_discovery",
+      "owner": "ralph",
+      "complexity": 2,
+      "description": "Add rzilla_projects discovery tool and rzilla_switch_project auto-config to the MCP server so the AI can discover and switch between projects within a single session. Currently the MCP server binds to one project at startup via --repo-dir or cwd. When a scrum master needs to operate on a different project, it has no way to discover or switch. Solution: (1) rzilla_projects tool scans a configured directory (default ~/Programming/personal/) for repos containing prd.json and returns name + path for each. (2) rzilla_switch_project tool writes/updates the .mcp.json in the target project to point the rzilla MCP server at that project, then instructs the human to restart the session with a fresh context. The AI can call this tool itself \u2014 no manual editing needed. This keeps tool signatures clean (no repo_dir on every call) while giving the AI full multi-project visibility.",
+      "acceptance_criteria": [
+        "ralph_mcp.py: rzilla_projects tool added \u2014 scans ~/Programming/personal/ (configurable via env var RALPH_PROJECTS_DIR) for directories containing prd.json, returns list of {name, path, pending_tasks, completed_tasks}",
+        "ralph_mcp.py: rzilla_switch_project tool added \u2014 takes project_path, writes .mcp.json in that project with the rzilla MCP server config pointing --repo-dir at the project",
+        "ralph_mcp.py: rzilla_switch_project returns instructions for the human to restart the session",
+        "ralph_mcp.py: Both tools work when the MCP server is running with no --repo-dir (hub mode) or with a specific --repo-dir (single-project mode)",
+        "tests/test_mcp_projects.py: rzilla_projects returns projects with prd.json from scanned directory",
+        "tests/test_mcp_projects.py: rzilla_switch_project writes valid .mcp.json to target project"
+      ],
+      "files": [
+        "ralph_mcp.py",
+        "tests/test_mcp_projects.py"
+      ],
+      "depends_on": [],
+      "completed": false,
+      "priority": 0
     }
   ]
 }
