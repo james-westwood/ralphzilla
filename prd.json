@@ -1551,6 +1551,29 @@
       "depends_on": [],
       "completed": false,
       "priority": 0
+    },
+    {
+      "id": "M6-16",
+      "epic": "M6",
+      "title": "multi_project_mcp_discovery",
+      "owner": "ralph",
+      "complexity": 2,
+      "description": "Add rzilla_projects discovery tool and rzilla_switch_project auto-config to the MCP server so the AI can discover and switch between projects within a single session. Currently the MCP server binds to one project at startup via --repo-dir or cwd. When a scrum master needs to operate on a different project, it has no way to discover or switch. Solution: (1) rzilla_projects tool scans a configured directory (default ~/Programming/personal/) for repos containing prd.json and returns name + path for each. (2) rzilla_switch_project tool writes/updates the .mcp.json in the target project to point the rzilla MCP server at that project, then instructs the human to restart the session with a fresh context. The AI can call this tool itself \u2014 no manual editing needed. This keeps tool signatures clean (no repo_dir on every call) while giving the AI full multi-project visibility.",
+      "acceptance_criteria": [
+        "ralph_mcp.py: rzilla_projects tool added \u2014 scans ~/Programming/personal/ (configurable via env var RALPH_PROJECTS_DIR) for directories containing prd.json, returns list of {name, path, pending_tasks, completed_tasks}",
+        "ralph_mcp.py: rzilla_switch_project tool added \u2014 takes project_path, writes .mcp.json in that project with the rzilla MCP server config pointing --repo-dir at the project",
+        "ralph_mcp.py: rzilla_switch_project returns instructions for the human to restart the session",
+        "ralph_mcp.py: Both tools work when the MCP server is running with no --repo-dir (hub mode) or with a specific --repo-dir (single-project mode)",
+        "tests/test_mcp_projects.py: rzilla_projects returns projects with prd.json from scanned directory",
+        "tests/test_mcp_projects.py: rzilla_switch_project writes valid .mcp.json to target project"
+      ],
+      "files": [
+        "ralph_mcp.py",
+        "tests/test_mcp_projects.py"
+      ],
+      "depends_on": [],
+      "completed": false,
+      "priority": 0
     }
   ]
 }
