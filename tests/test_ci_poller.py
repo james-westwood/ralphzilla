@@ -379,9 +379,7 @@ class TestWaitAndFix:
                 return {"status": "failed", "head_sha": sha, "run_id": 333}
             return {"status": "passed", "head_sha": sha, "run_id": 444}
 
-        ci_poller._get_head_sha = MagicMock(
-            side_effect=["abc123", "abc123", "def456"]
-        )
+        ci_poller._get_head_sha = MagicMock(side_effect=["abc123", "abc123", "def456"])
         ci_poller._ci_wait_sha = MagicMock(side_effect=wait_sha_side_effect)
         ci_poller._ci_check_sha = MagicMock(
             return_value={"status": "failed", "head_sha": "abc123", "run_id": 333}
