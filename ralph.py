@@ -4433,6 +4433,11 @@ class CIPoller:
             )
         return self._http_client
 
+    def close(self) -> None:
+        if self._http_client is not None:
+            self._http_client.close()
+            self._http_client = None
+
     def _gh_api_get(self, path: str) -> dict:
         client = self._get_http_client()
         repo_slug = self._get_repo_slug()
