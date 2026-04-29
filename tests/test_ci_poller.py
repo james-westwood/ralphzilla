@@ -1,5 +1,7 @@
 """Tests for CIPoller (SHA-based CI monitoring)."""
 
+import io
+import zipfile
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,6 +14,14 @@ from ralph import (
     RalphLogger,
     SubprocessRunner,
 )
+
+
+def _make_zip_bytes(content: str) -> bytes:
+    """Build an in-memory ZIP containing a single log file."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("0_job/0_step.txt", content)
+    return buf.getvalue()
 
 
 @pytest.fixture
@@ -224,42 +234,44 @@ class TestCiWaitSha:
 
 class TestCiFetchFailureLogs:
     def test_fetches_via_httpx(self, ci_poller):
-        ci_poller._get_gh_token = MagicMock(return_value="ghp_test")
+        mock_client = MagicMock()
+        ci_poller._get_http_client = MagicMock(return_value=mock_client)
         ci_poller._get_repo_slug = MagicMock(return_value="org/repo")
 
-        with patch("ralph.httpx.get") as mock_get:
-            mock_resp = MagicMock()
-            mock_resp.text = "error line 1\nerror line 2"
-            mock_resp.raise_for_status = MagicMock()
-            mock_get.return_value = mock_resp
-            result = ci_poller._ci_fetch_failure_logs(12345)
+        mock_resp = MagicMock()
+        mock_resp.content = _make_zip_bytes("error line 1\nerror line 2")
+        mock_client.get.return_value = mock_resp
+
+        result = ci_poller._ci_fetch_failure_logs(12345)
 
         assert "error line 1" in result
-        mock_get.assert_called_once()
+        mock_resp.raise_for_status.assert_called_once()
+        mock_client.get.assert_called_once()
 
     def test_falls_back_to_gh_cli_on_exception(self, ci_poller):
-        ci_poller._get_gh_token = MagicMock(return_value="ghp_test")
+        mock_client = MagicMock()
+        ci_poller._get_http_client = MagicMock(return_value=mock_client)
         ci_poller._get_repo_slug = MagicMock(return_value="org/repo")
+        mock_client.get.side_effect = Exception("network error")
 
-        with patch("ralph.httpx.get", side_effect=Exception("network error")):
-            ci_poller.runner.run.return_value = MagicMock(
-                stdout="fallback log line 1\nfallback log line 2"
-            )
-            result = ci_poller._ci_fetch_failure_logs(12345)
+        ci_poller.runner.run.return_value = MagicMock(
+            stdout="fallback log line 1\nfallback log line 2"
+        )
+        result = ci_poller._ci_fetch_failure_logs(12345)
 
         assert "fallback log line 1" in result
 
     def test_truncates_long_logs(self, ci_poller):
-        ci_poller._get_gh_token = MagicMock(return_value="ghp_test")
+        mock_client = MagicMock()
+        ci_poller._get_http_client = MagicMock(return_value=mock_client)
         ci_poller._get_repo_slug = MagicMock(return_value="org/repo")
 
         long_log = "x" * 10000
-        with patch("ralph.httpx.get") as mock_get:
-            mock_resp = MagicMock()
-            mock_resp.text = long_log
-            mock_resp.raise_for_status = MagicMock()
-            mock_get.return_value = mock_resp
-            result = ci_poller._ci_fetch_failure_logs(12345)
+        mock_resp = MagicMock()
+        mock_resp.content = _make_zip_bytes(long_log)
+        mock_client.get.return_value = mock_resp
+
+        result = ci_poller._ci_fetch_failure_logs(12345)
 
         assert len(result) <= 4000
 

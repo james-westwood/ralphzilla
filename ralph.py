@@ -16,6 +16,7 @@ Run with --help for full option list.
 import ast
 import asyncio
 import enum
+import io
 import json
 import os
 import re
@@ -24,6 +25,7 @@ import signal
 import subprocess
 import sys
 import time
+import zipfile
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -4368,9 +4370,10 @@ class CIPoller:
     """Polls CI completion using commit SHA to avoid stale-data race.
 
     After every push, captures git rev-parse HEAD to get the commit SHA.
-    Uses GitHub REST API via httpx to query runs by head_sha -- a SHA
-    has exactly one CI run, eliminating the 'new run ID' detection
-    problem that caused false timeouts with the old branch-based approach.
+    Uses GitHub REST API via httpx to query runs by head_sha so polling
+    is tied to the current commit rather than the branch, avoiding the
+    stale 'new run ID' detection problem that caused false timeouts with
+    the old branch-based approach.
 
     On failure: fetches logs via API, invokes coder fix loop, pushes fix,
     captures new SHA, and re-polls. No 'wait for new run' step needed.
@@ -4387,37 +4390,54 @@ class CIPoller:
         self.ai_runner = ai_runner
         self.logger = logger
         self.config = config
+        self._cached_token: str | None = None
+        self._cached_repo_slug: str | None = None
+        self._http_client: httpx.Client | None = None
 
     def _get_head_sha(self) -> str:
         result = self.runner.run(["git", "rev-parse", "HEAD"], check=True)
         return result.stdout.strip()
 
     def _get_gh_token(self) -> str:
-        result = self.runner.run(["gh", "auth", "token"], check=True)
-        token = result.stdout.strip()
-        if not token:
-            raise RuntimeError("gh auth token returned empty -- run gh auth login")
-        return token
+        if self._cached_token is None:
+            result = self.runner.run(["gh", "auth", "token"], check=True)
+            token = result.stdout.strip()
+            if not token:
+                raise RuntimeError("gh auth token returned empty -- run gh auth login")
+            self._cached_token = token
+        return self._cached_token
 
     def _get_repo_slug(self) -> str:
-        result = self.runner.run(["git", "remote", "get-url", "origin"], check=True)
-        url = result.stdout.strip()
-        if url.startswith("git@github.com:"):
-            return url.removeprefix("git@github.com:").removesuffix(".git")
-        if url.startswith("https://github.com/"):
-            return url.removeprefix("https://github.com/").removesuffix(".git")
-        raise RuntimeError(f"Cannot parse repo slug from remote URL: {url}")
+        if self._cached_repo_slug is None:
+            result = self.runner.run(["git", "remote", "get-url", "origin"], check=True)
+            url = result.stdout.strip()
+            if url.startswith("git@github.com:"):
+                self._cached_repo_slug = url.removeprefix("git@github.com:").removesuffix(".git")
+            elif url.startswith("https://github.com/"):
+                self._cached_repo_slug = url.removeprefix("https://github.com/").removesuffix(
+                    ".git"
+                )
+            else:
+                raise RuntimeError(f"Cannot parse repo slug from remote URL: {url}")
+        return self._cached_repo_slug
+
+    def _get_http_client(self) -> httpx.Client:
+        if self._http_client is None:
+            token = self._get_gh_token()
+            self._http_client = httpx.Client(
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                },
+                timeout=30,
+            )
+        return self._http_client
 
     def _gh_api_get(self, path: str) -> dict:
-        token = self._get_gh_token()
+        client = self._get_http_client()
         repo_slug = self._get_repo_slug()
-        resp = httpx.get(
+        resp = client.get(
             f"https://api.github.com/repos/{repo_slug}{path}",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
-            },
-            timeout=30,
         )
         resp.raise_for_status()
         return resp.json()
@@ -4517,18 +4537,19 @@ class CIPoller:
 
     def _ci_fetch_failure_logs(self, run_id: int) -> str:
         try:
-            token = self._get_gh_token()
+            client = self._get_http_client()
             repo_slug = self._get_repo_slug()
-            resp = httpx.get(
+            resp = client.get(
                 f"https://api.github.com/repos/{repo_slug}/actions/runs/{run_id}/logs",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/vnd.github+json",
-                },
-                timeout=30,
                 follow_redirects=True,
             )
-            log_text = resp.text
+            resp.raise_for_status()
+            with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+                parts = []
+                for name in zf.namelist():
+                    with zf.open(name) as f:
+                        parts.append(f.read().decode("utf-8", errors="replace"))
+            log_text = "\n".join(parts)
             return log_text[-4000:] if len(log_text) > 4000 else log_text
         except Exception:
             result = self.runner.run(
