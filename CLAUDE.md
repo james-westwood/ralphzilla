@@ -22,6 +22,7 @@ AI sprint runner — executes `prd.json` backlogs via AI agents with autonomous 
 - `TaskTracker` exclusively owns `prd.json`
 - Never commit directly to `main`
 - No AI attribution in commits, PRs, or issues
+- **Commit before ruff.** After editing a file, commit it immediately with `--no-verify` before running `ruff format` or any tool that touches the file. Ruff can silently discard uncommitted edits. If you commit first, `git checkout -- <file>` recovers anything lost. This rule applies to scrum masters and coders alike.
 
 ## Stack
 
