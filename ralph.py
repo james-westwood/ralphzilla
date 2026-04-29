@@ -34,6 +34,7 @@ from pathlib import Path
 
 import click
 import httpx
+import jwt
 import yaml
 
 # --- Constants ---
@@ -62,6 +63,11 @@ DEFAULT_OPENCODE_REVIEWER_MODEL = "opencode/kimi-k2.5"
 DEFAULT_OPENCODE_TEST_WRITER_MODEL = "opencode/minimax-m2.7"
 GEMINI_MODEL = "gemini-2.5-pro"
 ESCALATIONS_FILE = ".ralph/escalations.json"
+DEFAULT_APP_KEY_PATH = Path.home() / ".config" / "ralphzilla" / "app-private-key.pem"
+BOT_APP_ID = "3542372"
+BOT_USER_ID = 280339145
+BOT_NAME = "ralphzilla[bot]"
+BOT_EMAIL = f"{BOT_USER_ID}+ralphzilla[bot]@users.noreply.github.com"
 MAX_PROMPT_ARG_BYTES = 100_000  # ~100KB — safe CLI arg limit; beyond this write to file
 RALPH_PROMPT_FILE = ".ralph_prompt.md"
 MAX_RETRIES_PER_BLOCKER = 3
@@ -1526,6 +1532,84 @@ class LoopSupervisor:
         self.logger.info(f"Recorded run history: {entry['final_state']} ({tasks_completed} tasks)")
 
 
+class AppAuth:
+    """GitHub App authentication for ralphzilla[bot] identity."""
+
+    TOKEN_REFRESH_MARGIN_SECS = 300
+
+    def __init__(self, app_id: str, private_key_pem: str, install_id: int):
+        self._app_id = app_id
+        self._private_key_pem = private_key_pem
+        self._install_id = install_id
+        self._token: str | None = None
+        self._token_expires: float = 0.0
+
+    @classmethod
+    def create(cls, key_path: Path | None = None) -> "AppAuth | None":
+        path = key_path or DEFAULT_APP_KEY_PATH
+        if not path.exists():
+            return None
+        pem = path.read_text(encoding="utf-8")
+        install_id = cls._resolve_install_id(pem, BOT_APP_ID)
+        if install_id is None:
+            return None
+        return cls(app_id=BOT_APP_ID, private_key_pem=pem, install_id=install_id)
+
+    @staticmethod
+    def _resolve_install_id(pem: str, app_id: str) -> int | None:
+        now = int(time.time())
+        payload = {"iat": now - 60, "exp": now + 600, "iss": app_id}
+        token = jwt.encode(payload, pem, algorithm="RS256")
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        }
+        resp = httpx.get("https://api.github.com/app/installations", headers=headers)
+        if resp.status_code != 200:
+            return None
+        installations = resp.json()
+        if not installations:
+            return None
+        return installations[0]["id"]
+
+    def _ensure_token(self) -> str:
+        now = time.time()
+        if self._token and now < (self._token_expires - self.TOKEN_REFRESH_MARGIN_SECS):
+            return self._token
+        now_int = int(time.time())
+        payload = {"iat": now_int - 60, "exp": now_int + 600, "iss": self._app_id}
+        jwt_token = jwt.encode(payload, self._private_key_pem, algorithm="RS256")
+        headers = {
+            "Authorization": f"Bearer {jwt_token}",
+            "Accept": "application/vnd.github+json",
+        }
+        resp = httpx.post(
+            f"https://api.github.com/app/installations/{self._install_id}/access_tokens",
+            headers=headers,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        self._token = data["token"]
+        expires_at = data.get("expires_at", "")
+        if expires_at:
+            dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            self._token_expires = dt.timestamp()
+        else:
+            self._token_expires = now + 3600
+        return self._token
+
+    def git_env(self) -> dict[str, str]:
+        return {
+            "GIT_AUTHOR_NAME": BOT_NAME,
+            "GIT_AUTHOR_EMAIL": BOT_EMAIL,
+            "GIT_COMMITTER_NAME": BOT_NAME,
+            "GIT_COMMITTER_EMAIL": BOT_EMAIL,
+        }
+
+    def gh_env(self) -> dict[str, str]:
+        return {"GH_TOKEN": self._ensure_token()}
+
+
 class SubprocessRunner:
     """
     Single wrapper around subprocess.run() used by every component.
@@ -1589,17 +1673,20 @@ class SubprocessRunner:
         self,
         cmd: list[str],
         env_removals: list[str] | None = None,
+        env_additions: dict[str, str] | None = None,
         timeout: int = SUBPROCESS_TIMEOUT_SECS,
         cwd: "Path | None" = None,
         check: bool = False,
         start_new_session: bool = False,
     ) -> subprocess.CompletedProcess:
         env_removals = env_removals or []
+        env_additions = env_additions or {}
         self.logger.info(f"Running command: {' '.join(cmd)}")
 
         child_env = os.environ.copy()
         for key in env_removals:
             child_env.pop(key, None)
+        child_env.update(env_additions)
 
         if start_new_session:
             return self._run_in_new_session(cmd, child_env, timeout, cwd, check)
@@ -2375,14 +2462,19 @@ class PRManager:
     Handles race condition on fresh PRs with retry.
     """
 
-    def __init__(self, runner: SubprocessRunner, logger: RalphLogger):
+    def __init__(
+        self, runner: SubprocessRunner, logger: RalphLogger, app_auth: AppAuth | None = None
+    ):
         self.runner = runner
         self.logger = logger
+        self.app_auth = app_auth
 
     def create(self, branch: str, title: str, body: str) -> PRInfo:
         """Runs gh pr create, parses PR number, returns PRInfo."""
+        env_add = self.app_auth.gh_env() if self.app_auth else None
         result = self.runner.run(
             ["gh", "pr", "create", "--head", branch, "--title", title, "--body", body],
+            env_additions=env_add,
             check=True,
         )
         url = result.stdout.strip()
@@ -4670,10 +4762,13 @@ class Orchestrator:
     Runs the sprint loop: pre-flight, task selection, execution, cleanup.
     """
 
-    def __init__(self, config: Config, logger: RalphLogger):
+    def __init__(self, config: Config, logger: RalphLogger, app_key_path: Path | None = None):
         self.config = config
         self.logger = logger
         self.runner = SubprocessRunner(logger)
+        self.app_auth = AppAuth.create(app_key_path)
+        if self.app_auth:
+            self.logger.info("AppAuth loaded - bot identity active")
 
         self.task_tracker = TaskTracker(
             config.repo_dir / PRD_FILE,
@@ -4683,7 +4778,7 @@ class Orchestrator:
             workstream=config.workstream,
         )
         self.branch_manager = BranchManager(config.repo_dir, self.runner, logger)
-        self.pr_manager = PRManager(self.runner, logger)
+        self.pr_manager = PRManager(self.runner, logger, app_auth=self.app_auth)
         self.ai_runner = AIRunner(self.runner, logger, config)
         self.prd_guard = PRDGuard(self.pr_manager, logger)
         self.precommit_gate = PreCommitGate(self.runner, self.ai_runner, logger, config)
@@ -4742,6 +4837,7 @@ class Orchestrator:
         self.runner.run(["git", "add", "-A"], cwd=self.config.repo_dir, check=True)
         task_id = task.get("id", "unknown")
         task_title = task.get("title", "untitled")
+        git_env = self.app_auth.git_env() if self.app_auth else None
         self.runner.run(
             [
                 "git",
@@ -4750,6 +4846,7 @@ class Orchestrator:
                 "-m",
                 f"[{task_id}] {task_title} [coder-failed-partial]",
             ],
+            env_additions=git_env,
             cwd=self.config.repo_dir,
             check=True,
         )
@@ -5528,6 +5625,13 @@ def cli():
     type=str,
     help="Workstream prefix for worktree branch names (e.g. 'auth' → feature-auth-{task})",
 )
+@click.option(
+    "--app-key",
+    "app_key_path",
+    default=None,
+    type=click.Path(exists=True, path_type=Path),
+    help="GitHub App private key path (default: ~/.config/ralphzilla/app-private-key.pem)",
+)
 def run(
     max_iterations: int,
     skip_review: bool,
@@ -5549,6 +5653,8 @@ def run(
     repo_dir: Path | None,
     max_workers: int | None,
     workstream: str | None,
+    app_key_path: Path | None,
+    app_key_path: Path | None,
 ) -> int:
     """Run the AI sprint loop."""
     if repo_dir is None:
@@ -5619,7 +5725,7 @@ def run(
         logger.info("[DRY-RUN] Dry-run complete.")
         return 0
 
-    orchestrator = Orchestrator(config, logger)
+    orchestrator = Orchestrator(config, logger, app_key_path=app_key_path)
     orchestrator.run(config.max_iterations)
 
     return 0
