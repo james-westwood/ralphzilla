@@ -158,6 +158,7 @@ Implement the `ScrumMaster` layer described in the rewrite plan above `ralph.py`
 - [ ] Prompt injection detection — sanitise AI output before it is used as input to subsequent prompts
 - [ ] Architectural decision conflict detection — warn when a new task contradicts a completed task's stated design decision
 - [ ] `ralph doctor` — validates environment (git, gh, AI CLIs, SSH remote, Python version) with actionable fix suggestions
+- [ ] TUI presentation layer — maybe integrate [Ralphy](https://github.com/thenomadcode/ralphy) (Go / Bubble Tea) as the real-time dashboard; it watches `prd.json` and streams `opencode` output — would need adapter to consume ralphzilla's log stream and state instead
 
 ### Success criteria
 
