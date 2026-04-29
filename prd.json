@@ -1331,7 +1331,7 @@
         "ralph.py: verify() CLI command implemented with click"
       ],
       "owner": "ralph",
-      "completed": false,
+      "completed": true,
       "depends_on": [],
       "epic": "M6",
       "complexity": 2
