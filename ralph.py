@@ -5654,7 +5654,6 @@ def run(
     max_workers: int | None,
     workstream: str | None,
     app_key_path: Path | None,
-    app_key_path: Path | None,
 ) -> int:
     """Run the AI sprint loop."""
     if repo_dir is None:
