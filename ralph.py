@@ -965,11 +965,8 @@ class ReviewQualityChecker:
             return result, ""
 
         self.logger.warn(f"Review quality check failed: {result.reason}")
-        if self.config.opencode_only:
-            available_agents = ["opencode", "gemini", "claude"]
-        else:
-            available_agents = ["opencode", "gemini", "claude"]
-        retry_agent = available_agents[(round_num + 1) % len(available_agents)]
+        available_agents = ["opencode", "gemini", "claude"]
+        retry_agent = available_agents[(round_num - 1) % len(available_agents)]
         return result, retry_agent
 
 

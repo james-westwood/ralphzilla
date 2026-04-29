@@ -147,6 +147,25 @@ src/utils.py:5 - unused import""",
 class TestReviewQualityChecker:
     """Tests for ReviewQualityChecker."""
 
+    def test_check_with_retry_sequence(self, config):
+        """check_with_retry picks agents in order: opencode, gemini, claude."""
+        logger = MockLogger()
+        ai_runner = MockAIRunner([])
+        checker = ReviewQualityChecker(ai_runner, logger, config)
+
+        # A review that fails quality check (too short)
+        bad_review = "bad"
+
+        _, agent1 = checker.check_with_retry(bad_review, {}, {}, [], round_num=1)
+        _, agent2 = checker.check_with_retry(bad_review, {}, {}, [], round_num=2)
+        _, agent3 = checker.check_with_retry(bad_review, {}, {}, [], round_num=3)
+        _, agent4 = checker.check_with_retry(bad_review, {}, {}, [], round_num=4)
+
+        assert agent1 == "opencode"
+        assert agent2 == "gemini"
+        assert agent3 == "claude"
+        assert agent4 == "opencode"  # wraps around
+
     def test_pass_when_review_has_all_elements(self, config):
         logger = MockLogger()
         ai_runner = MockAIRunner([])
