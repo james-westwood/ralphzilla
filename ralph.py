@@ -16,6 +16,7 @@ Run with --help for full option list.
 import ast
 import asyncio
 import enum
+import httpx
 import json
 import os
 import re
@@ -4364,9 +4365,15 @@ class TestQualityChecker:
 
 
 class CIPoller:
-    """
-    Polls CI completion using run-ID pinning to avoid stale-data race.
-    On failure: fetches logs, invokes coder fix loop, re-polls.
+    """Polls CI completion using commit SHA to avoid stale-data race.
+
+    After every push, captures git rev-parse HEAD to get the commit SHA.
+    Uses GitHub REST API via httpx to query runs by head_sha -- a SHA
+    has exactly one CI run, eliminating the 'new run ID' detection
+    problem that caused false timeouts with the old branch-based approach.
+
+    On failure: fetches logs via API, invokes coder fix loop, pushes fix,
+    captures new SHA, and re-polls. No 'wait for new run' step needed.
     """
 
     def __init__(
@@ -4381,131 +4388,201 @@ class CIPoller:
         self.logger = logger
         self.config = config
 
-    def _get_latest_run_id(self, branch: str) -> str:
-        """Gets the latest run ID for a branch using gh run list.
+    def _get_head_sha(self) -> str:
+        result = self.runner.run(["git", "rev-parse", "HEAD"], check=True)
+        return result.stdout.strip()
 
-        Runs: gh run list --branch <branch> --json databaseId --jq .[0].databaseId
-
-        Returns the run ID or raises CITimeoutError if no run is found.
-        """
-        result = self.runner.run(
-            [
-                "gh",
-                "run",
-                "list",
-                "--branch",
-                branch,
-                "--json",
-                "databaseId",
-                "--jq",
-                ".[0].databaseId",
-            ],
-            check=True,
-        )
-        run_id = result.stdout.strip()
-        if not run_id:
-            raise CITimeoutError(f"No run found for branch {branch}")
-        return run_id
-
-    def _wait_for_run(self, run_id: str) -> str:
-        """Polls a specific run ID until completion.
-
-        Polls 'gh run view <run_id> --json status,conclusion' every CI_POLL_INTERVAL_SECS.
-        Returns 'PASSED' or 'FAILED'. Raises CITimeoutError after CI_POLL_MAX_ATTEMPTS.
-        """
-        attempts = 0
-        while attempts < CI_POLL_MAX_ATTEMPTS:
-            result = self.runner.run(
-                [
-                    "gh",
-                    "run",
-                    "view",
-                    run_id,
-                    "--json",
-                    "status,conclusion",
-                ],
-                check=True,
+    def _get_gh_token(self) -> str:
+        result = self.runner.run(["gh", "auth", "token"], check=True)
+        token = result.stdout.strip()
+        if not token:
+            raise RuntimeError(
+                "gh auth token returned empty -- run gh auth login"
             )
-            data = json.loads(result.stdout)
-            status = data.get("status", "")
-            conclusion = data.get("conclusion")
+        return token
 
-            if status in CI_PENDING_STATES:
-                self.logger.info(f"Run {run_id} status: {status} (attempt {attempts + 1})")
-                time.sleep(CI_POLL_INTERVAL_SECS)
-                attempts += 1
-                continue
-
-            if conclusion in CI_FAILURE_STATES:
-                return "FAILED"
-
-            if conclusion == "success":
-                return "PASSED"
-
-            return conclusion or "UNKNOWN"
-
-        raise CITimeoutError(
-            f"CI run {run_id} did not complete after "
-            f"{CI_POLL_MAX_ATTEMPTS * CI_POLL_INTERVAL_SECS // 60} minutes"
+    def _get_repo_slug(self) -> str:
+        result = self.runner.run(
+            ["git", "remote", "get-url", "origin"], check=True
+        )
+        url = result.stdout.strip()
+        if url.startswith("git@github.com:"):
+            return url.removeprefix("git@github.com:").removesuffix(".git")
+        if url.startswith("https://github.com/"):
+            return url.removeprefix("https://github.com/").removesuffix(
+                ".git"
+            )
+        raise RuntimeError(
+            f"Cannot parse repo slug from remote URL: {url}"
         )
 
-    def _wait_for_new_run(self, branch: str, prev_run_id: str, timeout: int = 180) -> str:
-        """Polls gh run list every 10s until a different run ID appears.
+    def _gh_api_get(self, path: str) -> dict:
+        token = self._get_gh_token()
+        repo_slug = self._get_repo_slug()
+        resp = httpx.get(
+            f"https://api.github.com/repos/{repo_slug}{path}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
 
-        Returns new run ID. Raises CITimeoutError if no new run after timeout seconds.
-        """
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            try:
-                new_run_id = self._get_latest_run_id(branch)
-                if new_run_id != prev_run_id:
-                    self.logger.info(f"New run detected: {new_run_id}")
-                    return new_run_id
-            except Exception:
-                pass
+    def _ci_check_sha(self, head_sha: str) -> dict:
+        data = self._gh_api_get(
+            f"/actions/runs?head_sha={head_sha}&per_page=5"
+        )
+        runs = data.get("workflow_runs", [])
 
-            self.logger.info(f"Waiting for new run (current: {prev_run_id})...")
-            time.sleep(10)
+        if not runs:
+            return {
+                "status": "no_workflow",
+                "head_sha": head_sha,
+                "run_id": None,
+                "run_url": None,
+            }
 
-        raise CITimeoutError(f"No new run appeared for branch {branch} after {timeout}s")
+        latest = runs[0]
+        wf_status = latest.get("status", "unknown")
+        wf_conclusion = latest.get("conclusion")
+        run_id = latest.get("id")
+        html_url = latest.get("html_url", "")
+
+        if wf_status in (
+            "queued",
+            "in_progress",
+            "waiting",
+            "requested",
+            "pending",
+        ):
+            return {
+                "status": "running",
+                "head_sha": head_sha,
+                "run_id": run_id,
+                "run_url": html_url,
+            }
+
+        if wf_conclusion == "success":
+            return {
+                "status": "passed",
+                "head_sha": head_sha,
+                "run_id": run_id,
+                "run_url": html_url,
+            }
+
+        if wf_conclusion in (
+            "failure",
+            "error",
+            "cancelled",
+            "timed_out",
+        ):
+            return {
+                "status": "failed",
+                "head_sha": head_sha,
+                "run_id": run_id,
+                "run_url": html_url,
+            }
+
+        return {
+            "status": "unknown",
+            "head_sha": head_sha,
+            "run_id": run_id,
+            "run_url": html_url,
+        }
+
+    def _ci_wait_sha(self, head_sha: str, timeout: int = 300) -> dict:
+        start = time.time()
+
+        while True:
+            elapsed = time.time() - start
+            if elapsed > timeout:
+                result = self._ci_check_sha(head_sha)
+                result["status"] = "timeout"
+                return result
+
+            result = self._ci_check_sha(head_sha)
+
+            if result["status"] in (
+                "passed",
+                "failed",
+                "no_workflow",
+                "unknown",
+            ):
+                return result
+
+            self.logger.info(
+                f"CI for SHA {head_sha[:8]}: {result['status']} "
+                f"({elapsed:.0f}s elapsed)"
+            )
+
+            if elapsed < 30:
+                interval = 5
+            elif elapsed < 120:
+                interval = 15
+            else:
+                interval = 30
+
+            time.sleep(interval)
+
+    def _ci_fetch_failure_logs(self, run_id: int) -> str:
+        try:
+            token = self._get_gh_token()
+            repo_slug = self._get_repo_slug()
+            resp = httpx.get(
+                f"https://api.github.com/repos/{repo_slug}"
+                f"/actions/runs/{run_id}/logs",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                },
+                timeout=30,
+                follow_redirects=True,
+            )
+            log_text = resp.text
+            return log_text[-4000:] if len(log_text) > 4000 else log_text
+        except Exception:
+            result = self.runner.run(
+                ["gh", "run", "view", str(run_id), "--log-failed"],
+                check=False,
+            )
+            lines = result.stdout.splitlines()[-150:]
+            return "\n".join(lines)
 
     def wait_for_completion(self, pr_number: int, branch: str) -> CIResult:
-        """Waits for CI to complete using run-ID pinning.
+        self.logger.info(
+            f"Waiting for CI on PR #{pr_number} (branch: {branch})"
+        )
 
-        Uses the 'conclusion' field (not 'state') for pass/fail determination.
-        Treats empty checks list as PENDING.
-        """
-        self.logger.info(f"Waiting for CI on PR #{pr_number} (branch: {branch})")
+        head_sha = self._get_head_sha()
+        self.logger.info(f"Polling CI for SHA: {head_sha[:8]}")
 
-        try:
-            run_id = self._get_latest_run_id(branch)
-        except CITimeoutError:
-            self.logger.info("No run found yet — treating as PENDING")
-            return CIResult(passed=False, rounds_used=0)
+        result = self._ci_wait_sha(head_sha)
 
-        self.logger.info(f"Found run ID: {run_id}")
-
-        conclusion = self._wait_for_run(run_id)
-
-        if conclusion == "PASSED":
+        if result["status"] == "passed":
             self.logger.info("CI passed")
             return CIResult(passed=True, rounds_used=1)
 
-        self.logger.error(f"CI failed with conclusion: {conclusion}")
+        if result["status"] == "no_workflow":
+            self.logger.info("No workflow found -- treating as PENDING")
+            return CIResult(passed=False, rounds_used=0)
+
+        if result["status"] == "timeout":
+            self.logger.warn("CI timed out -- returning retry-able failure")
+            return CIResult(passed=False, rounds_used=0)
+
+        self.logger.error(f"CI failed with status: {result['status']}")
         return CIResult(passed=False, rounds_used=1)
 
     def _check_required_failures(self, pr_number: int) -> tuple[bool, list[str]]:
-        """Checks required CI checks for failures.
-
-        Filters to only required=true checks. Optional check failures log warning only.
-        Returns (has_required_failure, list of failing required check names).
-        On any error fetching checks, returns (False, []) — fail-open to avoid blocking.
-        """
         try:
             pr_manager = PRManager(self.runner, self.logger)
             checks = pr_manager.get_checks(pr_number)
         except Exception as exc:
-            self.logger.warn(f"Could not fetch PR checks (skipping required-check filter): {exc}")
+            self.logger.warn(
+                f"Could not fetch PR checks (skipping required-check filter): {exc}"
+            )
             return False, []
 
         required_failures = []
@@ -4524,19 +4601,18 @@ class CIPoller:
 
         return bool(required_failures), required_failures
 
-    def wait_and_fix(self, task: dict, pr_number: int, branch: str, prd: dict) -> CIResult:
-        """Waits for CI, on failure invokes coder fix loop, re-polls.
-
-        Filters CI checks to only block on required=true checks.
-        Optional failing checks log warning only.
-        """
+    def wait_and_fix(
+        self, task: dict, pr_number: int, branch: str, prd: dict
+    ) -> CIResult:
         rounds_used = 0
 
         while rounds_used < self.config.max_ci_fix_rounds:
             result = self.wait_for_completion(pr_number, branch)
 
             if result.passed:
-                has_required_failure, failing_required = self._check_required_failures(pr_number)
+                has_required_failure, failing_required = (
+                    self._check_required_failures(pr_number)
+                )
                 if not has_required_failure:
                     return CIResult(passed=True, rounds_used=rounds_used)
                 self.logger.warn(
@@ -4544,42 +4620,56 @@ class CIPoller:
                 )
 
             rounds_used += 1
-            self.logger.warn(f"CI failed (round {rounds_used}/{self.config.max_ci_fix_rounds})")
+            self.logger.warn(
+                f"CI failed (round {rounds_used}/{self.config.max_ci_fix_rounds})"
+            )
 
             if rounds_used >= self.config.max_ci_fix_rounds:
                 break
 
-            self.logger.info("Fetching CI logs and invoking coder fix loop...")
-
-            log_result = self.runner.run(
-                ["gh", "run", "view", "--log-failed"],
-                check=False,
+            self.logger.info(
+                "Fetching CI logs and invoking coder fix loop..."
             )
-            failure_log = log_result.stdout.splitlines()[-150:]
-            failure_log_text = "\n".join(failure_log)
+
+            head_sha = self._get_head_sha()
+            check_result = self._ci_check_sha(head_sha)
+            run_id = check_result.get("run_id")
+
+            if run_id:
+                failure_log_text = self._ci_fetch_failure_logs(run_id)
+            else:
+                log_result = self.runner.run(
+                    ["gh", "run", "view", "--log-failed"],
+                    check=False,
+                )
+                failure_log = log_result.stdout.splitlines()[-150:]
+                failure_log_text = "\n".join(failure_log)
 
             prompt = PromptBuilder.ci_fix_prompt(task, failure_log_text)
             coder, _, _ = self.ai_runner.assign_agents(task)
-            success = self.ai_runner.run_coder(coder, prompt, self.config.repo_dir)
+            success = self.ai_runner.run_coder(
+                coder, prompt, self.config.repo_dir
+            )
 
             if not success:
                 self.logger.error("Coder fix loop failed")
                 raise CIFailedFatal(f"Coder failed on round {rounds_used}")
 
-            self.logger.info("Pushing fix and waiting for new run...")
+            self.logger.info(
+                "Pushing fix and waiting for CI on new commit..."
+            )
 
-            try:
-                current_run_id = self._get_latest_run_id(branch)
-            except CITimeoutError:
-                current_run_id = ""
-
-            branch_manager = BranchManager(self.config.repo_dir, self.runner, self.logger)
+            branch_manager = BranchManager(
+                self.config.repo_dir, self.runner, self.logger
+            )
             branch_manager.push_branch(branch)
 
-            self._wait_for_new_run(branch, current_run_id, timeout=180)
-
-        self.logger.error(f"CI still failing after {rounds_used} fix rounds")
-        raise CIFailedFatal(f"CI still failing after {rounds_used} fix rounds")
+        self.logger.error(
+            f"CI still failing after {rounds_used} fix rounds"
+        )
+        raise CIFailedFatal(
+            f"CI still failing after {rounds_used} fix rounds"
+        )
 
 
 class Orchestrator:
