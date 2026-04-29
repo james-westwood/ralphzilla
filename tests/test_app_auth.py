@@ -1,4 +1,3 @@
-import os
 import time
 from unittest.mock import MagicMock, patch
 
@@ -61,11 +60,27 @@ class TestAppAuthTokenRefresh:
 
     def test_token_refreshed_near_expiry(self):
         auth = AppAuth(app_id=BOT_APP_ID, private_key_pem="dummy", install_id=123)
+        now = 1_700_000_000
         auth._token = "ghs_old"
-        auth._token_expires = time.time() + 100
-        with patch.object(auth, "_ensure_token", return_value="ghs_new"):
-            env = auth.gh_env()
-        assert env["GH_TOKEN"] == "ghs_new"
+        auth._token_expires = now  # expired: now >= _token_expires - margin
+
+        response = MagicMock()
+        response.json.return_value = {
+            "token": "ghs_new",
+            "expires_at": "2099-01-01T00:00:00Z",
+        }
+        response.raise_for_status = MagicMock()
+
+        with (
+            patch("ralph.time.time", return_value=now),
+            patch("ralph.jwt.encode", return_value="encoded-jwt"),
+            patch("ralph.httpx.post", return_value=response) as mock_post,
+        ):
+            token = auth._ensure_token()
+
+        assert token == "ghs_new"
+        assert auth._token == "ghs_new"
+        assert mock_post.called
 
 
 class TestSubprocessRunnerEnvAdditions:
@@ -81,20 +96,17 @@ class TestSubprocessRunnerEnvAdditions:
         )
         assert "hello_from_test" in result.stdout
 
-    def test_env_additions_override_existing(self, tmp_path):
+    def test_env_additions_override_existing(self, tmp_path, monkeypatch):
         logger = MagicMock()
         runner = SubprocessRunner(logger)
         script = tmp_path / "print_path.py"
         script.write_text("import os; print(os.environ.get('MY_TEST_RALPH_VAR', 'MISSING'))")
-        os.environ["MY_TEST_RALPH_VAR"] = "original"
-        try:
-            result = runner.run(
-                ["python3", str(script)],
-                env_additions={"MY_TEST_RALPH_VAR": "overridden"},
-                check=True,
-            )
-        finally:
-            del os.environ["MY_TEST_RALPH_VAR"]
+        monkeypatch.setenv("MY_TEST_RALPH_VAR", "original")
+        result = runner.run(
+            ["python3", str(script)],
+            env_additions={"MY_TEST_RALPH_VAR": "overridden"},
+            check=True,
+        )
         assert "overridden" in result.stdout
 
     def test_env_additions_none_is_noop(self):

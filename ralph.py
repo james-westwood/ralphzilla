@@ -34,8 +34,21 @@ from pathlib import Path
 
 import click
 import httpx
-import jwt
 import yaml
+
+try:
+    import jwt
+except ImportError:
+    class _MissingJWTModule:  # type: ignore[no-redef]
+        PyJWTError = Exception  # allow except-clause references even without PyJWT
+
+        def __getattr__(self, name: str) -> object:
+            raise ImportError(
+                "PyJWT is required for GitHub App authentication (`--app-key` / AppAuth). "
+                "Install with: pip install 'pyjwt[crypto]'"
+            )
+
+    jwt = _MissingJWTModule()  # type: ignore[assignment]
 
 # --- Constants ---
 
@@ -1549,7 +1562,13 @@ class AppAuth:
         path = key_path or DEFAULT_APP_KEY_PATH
         if not path.exists():
             return None
-        pem = path.read_text(encoding="utf-8")
+        try:
+            pem = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            click.echo(
+                f"Warning: disabling GitHub App auth; failed to read {path}: {exc}", err=True
+            )
+            return None
         install_id = cls._resolve_install_id(pem, BOT_APP_ID)
         if install_id is None:
             return None
@@ -1557,20 +1576,29 @@ class AppAuth:
 
     @staticmethod
     def _resolve_install_id(pem: str, app_id: str) -> int | None:
-        now = int(time.time())
-        payload = {"iat": now - 60, "exp": now + 600, "iss": app_id}
-        token = jwt.encode(payload, pem, algorithm="RS256")
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-        }
-        resp = httpx.get("https://api.github.com/app/installations", headers=headers)
-        if resp.status_code != 200:
+        try:
+            now = int(time.time())
+            payload = {"iat": now - 60, "exp": now + 600, "iss": app_id}
+            token = jwt.encode(payload, pem, algorithm="RS256")
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+            }
+            resp = httpx.get(
+                "https://api.github.com/app/installations", headers=headers, timeout=30
+            )
+            if resp.status_code != 200:
+                return None
+            installations = resp.json()
+            if not installations:
+                return None
+            return installations[0]["id"]
+        except (httpx.HTTPError, ValueError, TypeError, KeyError, jwt.PyJWTError) as exc:
+            click.echo(
+                f"Warning: disabling GitHub App auth; failed to resolve installation: {exc}",
+                err=True,
+            )
             return None
-        installations = resp.json()
-        if not installations:
-            return None
-        return installations[0]["id"]
 
     def _ensure_token(self) -> str:
         now = time.time()
@@ -1586,6 +1614,7 @@ class AppAuth:
         resp = httpx.post(
             f"https://api.github.com/app/installations/{self._install_id}/access_tokens",
             headers=headers,
+            timeout=30,
         )
         resp.raise_for_status()
         data = resp.json()
