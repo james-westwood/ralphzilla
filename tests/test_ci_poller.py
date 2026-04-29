@@ -60,9 +60,7 @@ class TestGetHeadSha:
         mock_runner.run.return_value = MagicMock(stdout="abc123def456\n")
         result = ci_poller._get_head_sha()
         assert result == "abc123def456"
-        mock_runner.run.assert_called_once_with(
-            ["git", "rev-parse", "HEAD"], check=True
-        )
+        mock_runner.run.assert_called_once_with(["git", "rev-parse", "HEAD"], check=True)
 
 
 class TestGetGhToken:
@@ -79,23 +77,17 @@ class TestGetGhToken:
 
 class TestGetRepoSlug:
     def test_ssh_url(self, ci_poller, mock_runner):
-        mock_runner.run.return_value = MagicMock(
-            stdout="git@github.com:org/repo.git\n"
-        )
+        mock_runner.run.return_value = MagicMock(stdout="git@github.com:org/repo.git\n")
         result = ci_poller._get_repo_slug()
         assert result == "org/repo"
 
     def test_https_url(self, ci_poller, mock_runner):
-        mock_runner.run.return_value = MagicMock(
-            stdout="https://github.com/org/repo.git\n"
-        )
+        mock_runner.run.return_value = MagicMock(stdout="https://github.com/org/repo.git\n")
         result = ci_poller._get_repo_slug()
         assert result == "org/repo"
 
     def test_unparseable_url_raises(self, ci_poller, mock_runner):
-        mock_runner.run.return_value = MagicMock(
-            stdout="https://gitlab.com/org/repo.git\n"
-        )
+        mock_runner.run.return_value = MagicMock(stdout="https://gitlab.com/org/repo.git\n")
         with pytest.raises(RuntimeError, match="Cannot parse repo slug"):
             ci_poller._get_repo_slug()
 
